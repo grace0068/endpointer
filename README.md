@@ -1,3 +1,11 @@
+# Endpointer
+
+Endpointer turns heterogeneous web listing pages into structured data sources that can be used through tables, REST APIs, and MCP servers.
+
+Originally built as a two-person project at KAIST MadCamp in July 2026, it is now being extended as an undergraduate Computer Science graduation project at Seoul National University.
+
+Instead of generating executable scraping code, LLMs produce declarative extraction specifications that are validated and executed by a deterministic interpreter, with recovery mechanisms for source-page changes.
+
 ## 📖  프로젝트 소개
 
 ---
@@ -85,97 +93,104 @@ HYU CSE 22
 저장한 뷰도 네 곳에 똑같이 적용되어, 화면에서 본 것과 API가 주는 것이 어긋나지 않습니다.
 > 
 
-## 📱 User Interface
+## 📱 User Interface
 
----
+Endpointer provides a simple interface for creating, managing, and connecting
+structured data collections from multiple web sources.
 
-<aside>
 
-
-#### 환영합니다!
-
----
+### 👋 환영합니다!
 
 **Endpointer**에서는 Google OAuth를 통한 편리한 소셜 로그인을 지원합니다.
 
-</aside>
+<p align="center">
+  <img
+    src="https://rigorous-climb-091.notion.site/image/attachment%3A7980c67b-7d21-46d7-be17-d863d2d10265%3Aimage.png?table=block&id=1dbc30f5-c8e2-823b-b671-817d06ebfa12&spaceId=5430d52f-471f-40d8-b6c5-6cd6095e8bfa&width=1320&userId=&cache=v2&imgBuildSrc=requestProxiedImageUrl"
+    width="900"
+    alt="Endpointer Welcome Screen"
+  >
+</p>
 
-<aside>
 
+### 🧭 튜토리얼
 
-#### **튜토리얼**
-
----
-
-**Endpointer**를 처음 접하는 사용자들이 서비스를 더 잘 이용할 수 있도록 튜토리얼을 제공합니다.
+**Endpointer**를 처음 접하는 사용자들이 서비스를 더 잘 이용할 수 있도록 튜토리얼을 제공합니다.  
 튜토리얼은 화면 좌측 하단 `다시보기`를 통해 재확인할 수 있습니다.
 
-</aside>
-
-<aside>
-
-
-#### **컬렉션 생성하기**
-
----
-
-**Endpointer**는 목록이 있는 페이지의 주소를 붙여넣는 것만으로 표를 만듭니다. 어떤 사이트를 봐야 할지 모를 때는 모으고 싶은 것을 말로 적어 후보를 찾을 수 있고, 여러 사이트를 담아 처음부터 하나의 테이블로 시작할 수도 있습니다.  
-
-</aside>
-
-<aside>
+<p align="center">
+  <img src="https://rigorous-climb-091.notion.site/image/attachment%3A4cd08784-426f-4669-ab26-4473cc01607b%3Aimage.png?table=block&id=5f3c30f5-c8e2-8339-80a9-8140e2fd4aeb&spaceId=5430d52f-471f-40d8-b6c5-6cd6095e8bfa&width=1320&userId=&cache=v2&imgBuildSrc=requestProxiedImageUrl" width="900" alt="Endpointer Tutorial">
+</p>
 
 
-#### 컬렉션 테이블 조회하기
+### ➕ 컬렉션 생성하기
 
----
+**Endpointer**는 목록이 있는 페이지의 주소를 붙여넣는 것만으로 표를 만듭니다.
 
-여러 사이트에서 모인 항목이 하나의 테이블로 합쳐집니다. 마감일·분류·출처로 조건을 걸 수 있고, 열 순서는 끌어서 바꿀 수 있으며, 걸어둔 조건은 그대로 저장할 수 있습니다.
+어떤 사이트를 봐야 할지 모를 때는 모으고 싶은 것을 말로 적어 후보를 찾을 수 있고,
+여러 사이트를 담아 처음부터 하나의 테이블로 시작할 수도 있습니다.
 
-</aside>
-
-<aside>
-
-
-#### 컬렉션 뷰 / 알림 관리
-
----
-
-표에서 건 조건을 저장하면 하나의 **뷰**가 되고, 그 조건에 새로 걸리는 항목이 생기는 순간 웹훅으로 알려줍니다. 같은 항목을 두 번 보내지 않습니다.
-
-</aside>
-
-<aside>
-
-#### 컬렉션 연결하기 🌟
-
----
-
-동일한 컬렉션을 **주소(API)**와 **AI(MCP)** 양쪽으로 꺼내 쓸 수 있습니다. 주소 한 줄을 복사한 후 사용하는 AI의 커넥터 설정에 붙여넣으면 끝이고, 별도의 설치나 설정 파일은 없습니다.
-
-</aside>
-
-<aside>
+<p align="center">
+  <img src="https://rigorous-climb-091.notion.site/image/attachment%3Ac7ca2b1b-77f7-4073-9033-b8c504024e90%3Aimage.png?table=block&id=360c30f5-c8e2-82c5-b655-813a5126936b&spaceId=5430d52f-471f-40d8-b6c5-6cd6095e8bfa&width=1320&userId=&cache=v2&imgBuildSrc=requestProxiedImageUrl" width="900" alt="Create an Endpointer Collection">
+</p>
 
 
-#### 컬렉션 소스 관리/추가
+### 📊 컬렉션 테이블 조회하기
 
----
+여러 사이트에서 모인 항목이 하나의 테이블로 합쳐집니다.
 
-**Endpointer**는 하나의 컬렉션에 여러 사이트를 붙여 같은 표로 관리합니다. 새 주소를 넣으면 기존 표의 열과 형식에 맞춰 자동으로 합쳐지고, 사이트마다 수집 상태는 사람이 읽는 문장으로 보여줍니다.
+마감일·분류·출처로 조건을 걸 수 있고, 열 순서는 끌어서 바꿀 수 있으며,
+걸어둔 조건은 그대로 저장할 수 있습니다.
 
-</aside>
+<p align="center">
+  <img src="https://rigorous-climb-091.notion.site/image/attachment%3A5b6d7dfd-ce52-4e44-9d82-1901b055ad5e%3Aimage.png?table=block&id=d85c30f5-c8e2-83b3-a7dc-0158d484f800&spaceId=5430d52f-471f-40d8-b6c5-6cd6095e8bfa&width=1320&userId=&cache=v2&imgBuildSrc=requestProxiedImageUrl" width="900" alt="Endpointer Collection Table">
+</p>
 
-<aside>
+
+### 🔔 컬렉션 뷰 / 알림 관리
+
+표에서 건 조건을 저장하면 하나의 **뷰**가 되고,
+그 조건에 새로 걸리는 항목이 생기는 순간 웹훅으로 알려줍니다.
+
+같은 항목을 두 번 보내지 않습니다.
+
+<p align="center">
+  <img src="https://rigorous-climb-091.notion.site/image/attachment%3A546d3916-5f4d-4351-88f3-51db36f964a0%3Aimage.png?table=block&id=53ac30f5-c8e2-834e-9f24-8102866fdde0&spaceId=5430d52f-471f-40d8-b6c5-6cd6095e8bfa&width=1320&userId=&cache=v2&imgBuildSrc=requestProxiedImageUrl" width="900" alt="Endpointer Views and Notifications">
+</p>
 
 
-#### 모두의 컬렉션
+### 🔌 컬렉션 연결하기
 
----
+동일한 컬렉션을 **주소(API)**와 **AI(MCP)** 양쪽으로 꺼내 쓸 수 있습니다.
 
-다른 사람이 공개한 컬렉션을 둘러보고 복제해 내 것으로 가져올 수 있습니다. 복제본에는 원작자 크레딧이 남습니다.
+주소 한 줄을 복사한 후 사용하는 AI의 커넥터 설정에 붙여넣으면 끝이고,
+별도의 설치나 설정 파일은 없습니다.
 
-</aside>
+<p align="center">
+  <img src="https://rigorous-climb-091.notion.site/image/attachment%3A08d2a55e-bc2e-4492-b138-e46209258bd3%3Aimage.png?table=block&id=462c30f5-c8e2-8224-bbb2-0126ac596eb1&spaceId=5430d52f-471f-40d8-b6c5-6cd6095e8bfa&width=1320&userId=&cache=v2&imgBuildSrc=requestProxiedImageUrl" width="900" alt="Endpointer REST API and MCP">
+</p>
+
+
+### 🌐 컬렉션 소스 관리 / 추가
+
+**Endpointer**는 하나의 컬렉션에 여러 사이트를 붙여 같은 표로 관리합니다.
+
+새 주소를 넣으면 기존 표의 열과 형식에 맞춰 자동으로 합쳐지고,
+사이트마다 수집 상태는 사람이 읽는 문장으로 보여줍니다.
+
+<p align="center">
+  <img src="https://rigorous-climb-091.notion.site/image/attachment%3A59ef4e18-238f-41cf-a48e-1fce5e6ef327%3Aimage.png?table=block&id=edcc30f5-c8e2-839b-b90b-8150081c1567&spaceId=5430d52f-471f-40d8-b6c5-6cd6095e8bfa&width=1320&userId=&cache=v2&imgBuildSrc=requestProxiedImageUrl" width="900" alt="Manage Endpointer Sources">
+</p>
+
+
+### 🗂️ 모두의 컬렉션
+
+다른 사람이 공개한 컬렉션을 둘러보고 복제해 내 것으로 가져올 수 있습니다.
+
+복제본에는 원작자 크레딧이 남습니다.
+
+<p align="center">
+  <img src="https://rigorous-climb-091.notion.site/image/attachment%3A01366d5f-68a3-4c91-9054-ff20b139f117%3Adc10f645-314d-4160-93b4-31bcab035abf.png?table=block&id=78fc30f5-c8e2-839e-a7af-815cc5b2d6da&spaceId=5430d52f-471f-40d8-b6c5-6cd6095e8bfa&width=1320&userId=&cache=v2&imgBuildSrc=requestProxiedImageUrl" width="900" alt="Endpointer Public Collections">
+</p>
 
 ## 🌌  Implementation
 
