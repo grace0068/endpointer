@@ -24,6 +24,7 @@ import type { RankedCandidate } from '../probe/types'
 import { generateJson, type GeminiFailureReason } from './gemini'
 import { buildDiscoverPrompt, DISCOVER_SYSTEM, type CompileCandidateBrief } from './prompts'
 import { repairSpecDraft } from './repair-draft'
+import { checkPathsAgainstSample } from './sample-check'
 
 const log = childLogger({ mod: 'discover' })
 
@@ -110,6 +111,17 @@ export async function discoverSpec(input: DiscoverInput): Promise<DiscoverResult
       host: input.host,
       ...(input.allowPrivateHosts !== undefined ? { allowPrivateHosts: input.allowPrivateHosts } : {}),
     })
+
+    // 모양은 맞아도 표본에 없는 키를 지어냈을 수 있다 — 재생성 기회가 남았을 때만 되돌린다 (ADR A45).
+    // 마지막 판은 그대로 넘겨 기존 흐름(수집 → 0건이면 재컴파일)이 받게 둔다. LLM 호출 상한을 늘리지 않는다.
+    const sampleErrors =
+      parsed.ok && n < 2 ? checkPathsAgainstSample(parsed.spec, input.candidate.rows, input.candidate.keys) : []
+    if (parsed.ok && sampleErrors.length > 0) {
+      attempts.push({ n, ok: false, errors: sampleErrors })
+      previousErrors = sampleErrors
+      log.warn({ host: input.host, attempt: n, errors: sampleErrors }, '표본에 없는 경로 — 다시 만든다')
+      continue
+    }
 
     if (parsed.ok) {
       attempts.push({ n, ok: true, errors: [] })

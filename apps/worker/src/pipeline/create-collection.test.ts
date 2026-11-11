@@ -6,8 +6,9 @@
 //   · 컬렉션 이름과 slug 가 비면 사용자가 이름부터 지어야 한다 (B3)
 
 import { describe, expect, it } from 'vitest'
+import { AdapterSpecSchema } from '@endpointer/core/spec'
 
-import { collectionNameFrom, createCollectionFromUrl, normalizeUrl, slugFrom } from './create-collection'
+import { collectionNameFrom, createCollectionFromUrl, normalizeUrl, slugFrom, zeroItemsHint } from './create-collection'
 
 describe('normalizeUrl', () => {
   it('스킴이 있으면 그대로 받는다', () => {
@@ -123,5 +124,33 @@ describe('slugFrom — API 경로에 그대로 들어간다', () => {
   it('무슨 일이 있어도 비지 않는다', () => {
     expect(slugFrom('', null)).not.toBe('')
     expect(slugFrom('...', '!!!')).not.toBe('')
+  })
+})
+
+// ── 0건 재컴파일 안내문 (ADR A45) ──────────────────────────────────────
+
+describe('zeroItemsHint — 모드를 따른다', () => {
+  const base = { spec_version: 1, fields: { title: { path: '$.name', type: 'text' } } }
+
+  it('JSONPath 모드는 "JSON 표본"이라 말하고 실제 키를 준다', () => {
+    const spec = AdapterSpecSchema.parse({
+      ...base,
+      fetch: { mode: 'inline_json', url: 'https://example.com/l', script: { kind: 'ld_json' } },
+      list: '$.itemListElement[*]',
+    })
+    const hint = zeroItemsHint(spec, { keys: ['name', 'url'] })
+    expect(hint).toContain('JSON 객체')
+    expect(hint).toContain('name, url')
+    expect(hint).not.toContain('HTML 표본')
+  })
+
+  it('CSS 모드는 예전처럼 HTML 표본을 가리킨다', () => {
+    const spec = AdapterSpecSchema.parse({
+      spec_version: 1,
+      fetch: { mode: 'html', url: 'https://example.com/l' },
+      list: 'css:li',
+      fields: { title: { path: 'css:a', type: 'text' } },
+    })
+    expect(zeroItemsHint(spec, { keys: [] })).toContain('HTML 표본')
   })
 })

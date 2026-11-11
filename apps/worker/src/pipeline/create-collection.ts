@@ -22,6 +22,7 @@
 
 import type { CollectionSchemaJson, ValidationReport } from '@endpointer/core'
 import type { AdapterSpec, InterpretedItem } from '@endpointer/core/spec'
+import { pathSyntaxFor } from '@endpointer/core/spec'
 
 import { discoverSpec } from '../compile'
 import { runAdapter } from '../fetchers'
@@ -194,7 +195,7 @@ export async function createCollectionFromUrl(
       pageText: probed.page.text,
       ...(input.allowPrivateHosts !== undefined ? { allowPrivateHosts: input.allowPrivateHosts } : {}),
       previousErrors: [
-        `직전 스펙은 검증을 통과했지만 실제 페이지에서 항목이 0개 뽑혔다 (list: ${spec.list}). 목록 경로와 필드 경로를 후보의 HTML 표본에 실제로 있는 것으로 다시 골라라.`,
+        zeroItemsHint(spec, probed.best),
         ...(executed.failure !== null ? [executed.failure] : []),
       ],
     })
@@ -402,4 +403,28 @@ export function slugFrom(host: string, title: string | null): string {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'collection'
   )
+}
+
+// ── 0건 재컴파일 안내문 (ADR A45) ───────────────────────────────────────
+
+/**
+ * 검증은 통과했는데 실제로 0개가 뽑힌 스펙을 들고 다시 컴파일할 때 붙이는 문장.
+ *
+ * **모드를 따른다.** 전에는 언제나 "HTML 표본에 있는 것으로 다시 골라라" 였는데,
+ * json·inline_json 후보의 표본은 HTML 이 아니라 **항목 객체**다 — 엉뚱한 지시였고, 실측에서
+ * 재시도도 같은 지어낸 키로 다시 실패했다. JSONPath 모드면 행에 실제로 있는 키를 같이 준다.
+ */
+export function zeroItemsHint(
+  spec: AdapterSpec,
+  candidate: { keys: readonly string[] },
+): string {
+  const head = `직전 스펙은 검증을 통과했지만 실제 페이지에서 항목이 0개 뽑혔다 (list: ${spec.list}).`
+  if (pathSyntaxFor(spec.fetch.mode) === 'jsonpath') {
+    const keys = candidate.keys.length > 0 ? candidate.keys.join(', ') : '(표본에서 키를 읽지 못함)'
+    return (
+      `${head} 항목 표본은 JSON 객체다. 필드 경로는 항목 하나를 기준으로, ` +
+      `항목에 실제로 있는 키(${keys})로만 다시 골라라. 표본에 없는 키를 지어내지 마라.`
+    )
+  }
+  return `${head} 목록 경로와 필드 경로를 후보의 HTML 표본에 실제로 있는 것으로 다시 골라라.`
 }

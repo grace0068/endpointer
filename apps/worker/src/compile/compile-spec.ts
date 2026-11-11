@@ -24,6 +24,7 @@ import { sampleRows } from '../probe/scan'
 import type { RankedCandidate } from '../probe/types'
 import { generateJson, type GeminiFailureReason } from './gemini'
 import { repairSpecDraft } from './repair-draft'
+import { checkPathsAgainstSample } from './sample-check'
 import { buildCompilePrompt, buildHealPrompt, COMPILE_SYSTEM, type CompileCandidateBrief } from './prompts'
 
 const log = childLogger({ mod: 'compile' })
@@ -103,6 +104,16 @@ export async function compileSpec(input: CompileInput): Promise<CompileResult> {
     }
 
     const parsed = parseGeminiSpecOutput(repairSpecDraft(out.text, knownFacts(brief)), validateOpts)
+
+    // 표본에 없는 키를 지어냈는지 — 재생성 기회가 남았을 때만 되돌린다 (ADR A45)
+    const sampleErrors =
+      parsed.ok && n < 2 ? checkPathsAgainstSample(parsed.spec, input.candidate.rows, input.candidate.keys) : []
+    if (parsed.ok && sampleErrors.length > 0) {
+      attempts.push({ n, ok: false, errors: sampleErrors })
+      previousErrors = sampleErrors
+      log.warn({ host: input.host, attempt: n, errors: sampleErrors }, '표본에 없는 경로 — 다시 만든다')
+      continue
+    }
 
     if (parsed.ok) {
       attempts.push({ n, ok: true, errors: [] })
