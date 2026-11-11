@@ -22,8 +22,8 @@
 // 이 파일도 `create-collection.ts` 처럼 **DB 를 모른다.** 저장은 `persist.ts` 몫이다.
 
 import type { CollectionSchemaJson } from '@endpointer/core'
-import type { AdapterSpec, InterpretedItem } from '@endpointer/core/spec'
-import { validateSpec } from '@endpointer/core/spec'
+import type { AdapterSpec, InterpretedItem, PathSyntax } from '@endpointer/core/spec'
+import { pathSyntaxFor, validateSpec } from '@endpointer/core/spec'
 
 import { matchFields, traceValue, type FieldMatch, type TraceHit } from '../compile'
 import { getConfig } from '../config'
@@ -180,7 +180,14 @@ export async function attachSourceToCollection(input: AttachSourceInput): Promis
   // 접합 경로 전용 검사를 새로 만들지 않는다. 만드는 순간 이쪽에만 있는 구멍이 생긴다.
   const draft: Record<string, unknown> = {
     spec_version: 1,
-    fetch: { mode: candidate.fetch_mode, url: candidate.fetch_url },
+    fetch: {
+      mode: candidate.fetch_mode,
+      url: candidate.fetch_url,
+      // inline_json 은 어느 script 인지가 스펙의 일부다 (ADR A43) — 빼면 관문에서 통째로 거절된다
+      ...(candidate.source.kind === 'inline_json' && candidate.source.locator !== null
+        ? { script: candidate.source.locator }
+        : {}),
+    },
     list: matched.result.list,
     ...(matched.result.dedupe_key !== null ? { dedupe_key: matched.result.dedupe_key } : {}),
     fields: Object.fromEntries(
@@ -329,6 +336,14 @@ export interface ResolveInput {
   value: string
   skipBrowser?: boolean
   skipDom?: boolean
+  /**
+   * 이미 있는 스펙의 경로 문법. 주면 **그 문법을 내는 후보만** 쓴다 (ADR A43 ③).
+   *
+   * 칸 고치기(`repair-field`)는 기존 스펙의 경로 하나만 갈아끼운다. 그런데 probe 가
+   * 이번에는 다른 단계로 뚫릴 수 있다 — inline_json 스펙에 DOM 후보의 `css:` 경로를
+   * 끼우면 한 스펙에 두 문법이 섞여 관문에서 통째로 거절된다. 그 전에 걸러야 한다.
+   */
+  expectSyntax?: PathSyntax
 }
 
 export type ResolveOutcome =
@@ -354,9 +369,23 @@ export async function resolveByPastedValue(input: ResolveInput): Promise<Resolve
     return { ok: false, key: input.key, message: MESSAGES.no_list }
   }
 
+  // 기대 문법이 있으면 그 문법을 내는 후보 중 최고점을 쓴다 (없으면 1등 후보)
+  const usable =
+    input.expectSyntax === undefined
+      ? probed.best
+      : (probed.candidates.find((c) => pathSyntaxFor(c.fetch_mode) === input.expectSyntax) ?? null)
+  if (usable === null) {
+    return {
+      ok: false,
+      key: input.key,
+      // 왜인지 내부 사정을 말하지 않는다 (B2·B4). 다음에 할 일만 말한다.
+      message: '이 사이트에서 값을 찾는 방식이 전과 달라졌어요. 사이트를 다시 붙여 주세요.',
+    }
+  }
+
   const hits = traceValue({
-    mode: probed.best.fetch_mode,
-    rows: rowsForTrace(probed.best),
+    mode: usable.fetch_mode,
+    rows: rowsForTrace(usable),
     needle: input.value,
   })
   const best = hits[0]
@@ -379,9 +408,12 @@ export async function resolveByPastedValue(input: ResolveInput): Promise<Resolve
  * 역추적에 넣을 원소들.
  * html·browser 후보는 `rows` 가 **화면 글자**라서 경로를 만들 수 없다 — 태그가 있는
  * `row_html` 을 써야 한다 (probe/types.ts 의 rows 주석).
+ *
+ * json·**inline_json** 후보는 `rows` 자체가 객체다 — 꺼낸 것이 JSON 이므로 JSONPath 를 만든다
+ * (ADR A43 ③: 여기는 "문법" 기준이 맞다. 모드 이름으로 판단하면 inline_json 이 빠진다).
  */
 function rowsForTrace(candidate: RankedCandidate): readonly unknown[] {
-  if (candidate.fetch_mode === 'json') return candidate.rows
+  if (pathSyntaxFor(candidate.fetch_mode) === 'jsonpath') return candidate.rows
   return candidate.row_html ?? candidate.rows
 }
 

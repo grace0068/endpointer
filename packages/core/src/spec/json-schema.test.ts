@@ -152,9 +152,23 @@ describe('buildAdapterSpecResponseSchema', () => {
     expect(schema.properties?.['fields']?.properties?.['deadline']?.properties?.['type']?.enum).toEqual(['date'])
   })
 
-  it('fetch 는 세 모드의 anyOf 다', () => {
+  it('fetch 는 네 모드의 anyOf 다 (ADR A43 — inline_json 추가)', () => {
     const modes = (schema.properties?.['fetch']?.anyOf ?? []).map((b) => b.properties?.['mode']?.enum?.[0])
-    expect(modes).toEqual(['json', 'html', 'browser'])
+    expect(modes).toEqual(['json', 'inline_json', 'html', 'browser'])
+  })
+
+  it('inline_json 갈래는 script 를 필수로 요구한다 (ADR A43 ①)', () => {
+    const inline = (schema.properties?.['fetch']?.anyOf ?? []).find(
+      (b) => b.properties?.['mode']?.enum?.[0] === 'inline_json',
+    )
+    expect(inline?.required).toContain('script')
+    // kind 는 닫힌 집합이다 — 모델이 다른 방법을 지어낼 여지를 스키마에서 없앤다
+    expect(inline?.properties?.['script']?.properties?.['kind']?.enum).toEqual([
+      'id',
+      'global',
+      'ld_json',
+      'json_script',
+    ])
   })
 
   it('pagination 은 네 종류의 anyOf 다', () => {

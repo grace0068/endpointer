@@ -13,16 +13,18 @@ import { normalizeValue, toJsonValue } from '../normalize'
 import type { CollectionSchemaJson, FieldDef } from '../types/collection'
 import type { ItemData, ItemProvenance, ItemRaw, ItemValue } from '../types/item'
 import type { FieldValidation } from '../types/run'
+import { extractInlineJson } from './inline-script'
 import type { HtmlAdapter } from './paths'
 import { evaluateCssPath, evaluateJsonPath, PathSyntaxError, selectCssNodes } from './paths'
 import type { AdapterSpec } from './spec'
+import { pathSyntaxFor } from './spec'
 import type { TransformContext } from './transform'
 import { runTransformPipeline } from './transform'
 
 // ── 입출력 ─────────────────────────────────────────────────────────────
 
 export interface InterpretContext {
-  /** html · browser 모드에서 필수. core 는 cheerio 를 모른다 (paths.ts 주석 참조) */
+  /** html · browser · inline_json 모드에서 필수. core 는 cheerio 를 모른다 (paths.ts 주석 참조) */
   html?: HtmlAdapter
   /** `absolute_url` 의 기준. 기본값은 spec.fetch.url */
   baseUrl?: string
@@ -70,12 +72,13 @@ export interface InterpretResult {
 /**
  * 스펙대로 payload 를 읽어 아이템 배열을 만든다.
  *
- * @param payload json 모드면 파싱된 JSON, html·browser 모드면 HTML 문자열
+ * @param payload json 모드면 파싱된 JSON, html·browser·inline_json 모드면 HTML 문자열
  */
 export function interpretSpec(spec: AdapterSpec, payload: unknown, ctx: InterpretContext = {}): InterpretResult {
   const warnings: string[] = []
   const mode = spec.fetch.mode
-  const isJson = mode === 'json'
+  // 경로 문법은 모드가 아니라 매핑이 정한다 (A43 ③). inline_json 은 HTML 을 받지만 JSONPath 다
+  const isJsonPathMode = pathSyntaxFor(mode) === 'jsonpath'
 
   const baseUrl = ctx.baseUrl ?? spec.fetch.url.replace('{page}', '1')
   const now = ctx.now ?? new Date()
@@ -112,7 +115,7 @@ export function interpretSpec(spec: AdapterSpec, payload: unknown, ctx: Interpre
       // 1. 경로 평가
       let rawValue: unknown
       try {
-        rawValue = readPath(row, field.path, isJson, ctx)
+        rawValue = readPath(row, field.path, isJsonPathMode, ctx)
       } catch (e) {
         rawValue = undefined
         if (e instanceof PathSyntaxError) pushWarningOnce(warnings, e.message)
@@ -154,7 +157,7 @@ export function interpretSpec(spec: AdapterSpec, payload: unknown, ctx: Interpre
       }
     }
 
-    const key = buildExternalKey(spec, row, data, isJson, ctx)
+    const key = buildExternalKey(spec, row, data, isJsonPathMode, ctx)
 
     // 신원 없는 행은 항목이 아니다 (day2 실측: wevity 머리글 행이 항목으로 앉았다).
     // row_hash 는 dedupe_key 도 title 도 못 뽑았다는 뜻이고, 스펙에 link 필드가 있는데
@@ -208,14 +211,33 @@ export function interpretSpec(spec: AdapterSpec, payload: unknown, ctx: Interpre
 // ── 행 뽑기 ────────────────────────────────────────────────────────────
 
 /**
- * json 모드는 값 배열, html·browser 모드는 행 HTML 조각 배열을 돌려준다.
+ * json·inline_json 모드는 값 배열, html·browser 모드는 행 HTML 조각 배열을 돌려준다.
  * 어느 쪽이든 이후 필드 평가는 "행 안에서" 이뤄진다.
  */
 function extractRows(spec: AdapterSpec, payload: unknown, ctx: InterpretContext, warnings: string[]): unknown[] {
-  if (spec.fetch.mode === 'json') {
+  const mode = spec.fetch.mode
+
+  if (mode === 'json' || mode === 'inline_json') {
+    // inline_json 은 HTML 을 받는다 — 먼저 script 안의 JSON 을 꺼낸다 (ADR A43).
+    // 이미 파싱된 값이 들어오는 경로(테스트)도 있으므로 문자열일 때만 꺼낸다.
+    let data: unknown = payload
+    if (mode === 'inline_json' && typeof payload === 'string') {
+      if (!ctx.html) {
+        warnings.push('페이지 내용을 읽는 방법이 아직 연결되지 않았습니다')
+        return []
+      }
+      const extracted = extractInlineJson(payload, spec.fetch.script, ctx.html)
+      if (!extracted.ok) {
+        // 던지지 않는다 — 부분 성공이 1급이고(원칙 ④) 실패는 상태 문구다(B4)
+        warnings.push(extracted.reason)
+        return []
+      }
+      data = extracted.data
+    }
+
     let rows: unknown[]
     try {
-      rows = evaluateJsonPath(payload, spec.list)
+      rows = evaluateJsonPath(data, spec.list)
     } catch (e) {
       warnings.push(e instanceof Error ? e.message : String(e))
       return []
@@ -242,9 +264,12 @@ function extractRows(spec: AdapterSpec, payload: unknown, ctx: InterpretContext,
   }
 }
 
-/** 행 하나에서 경로 하나를 읽는다. 여러 개가 걸리면 배열로 준다 (`join` 이 받는다) */
-function readPath(row: unknown, path: string, isJson: boolean, ctx: InterpretContext): unknown {
-  if (isJson) {
+/**
+ * 행 하나에서 경로 하나를 읽는다. 여러 개가 걸리면 배열로 준다 (`join` 이 받는다).
+ * `jsonPath` 는 "이 모드의 경로 문법이 JSONPath 인가" 다 — 모드 이름이 아니다 (A43 ③).
+ */
+function readPath(row: unknown, path: string, jsonPath: boolean, ctx: InterpretContext): unknown {
+  if (jsonPath) {
     const matches = evaluateJsonPath(row, path)
     if (matches.length === 0) return undefined
     return matches.length === 1 ? matches[0] : matches
@@ -280,13 +305,13 @@ function buildExternalKey(
   spec: AdapterSpec,
   row: unknown,
   data: ItemData,
-  isJson: boolean,
+  jsonPath: boolean,
   ctx: InterpretContext,
 ): { external_key: string; origin: ExternalKeyOrigin } {
   if (spec.dedupe_key !== undefined) {
     let raw: unknown
     try {
-      raw = readPath(row, spec.dedupe_key, isJson, ctx)
+      raw = readPath(row, spec.dedupe_key, jsonPath, ctx)
     } catch {
       raw = undefined
     }

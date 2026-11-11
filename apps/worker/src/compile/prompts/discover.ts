@@ -9,10 +9,8 @@
 // 그래서 "모르겠으면 빼라" 가 아니라 **"쓸 만한 칸을 반드시 찾아내라"** 쪽으로 민다 —
 // 다만 지어내는 것과는 다르다. 표본에 있는 값만 쓴다.
 
-import type { FetchMode } from '@endpointer/core'
-
 import { jsonBlock, KOREAN_LIST_SITE_NOTES, PATH_SYNTAX, textBlock, transformOpsSection } from './shared'
-import type { CompileCandidateBrief } from './compile-spec'
+import { FETCH_MODE_HINT, scriptLines, type CompileCandidateBrief } from './compile-spec'
 
 export const DISCOVER_SYSTEM = `
 당신은 목록형 웹페이지를 보고 **표를 설계하는 사람**이다.
@@ -46,12 +44,6 @@ function todayHint(): string {
   const m = String(kst.getUTCMonth() + 1).padStart(2, '0')
   const d = String(kst.getUTCDate()).padStart(2, '0')
   return `${y}${m}${d} 또는 ${y}-${m}-${d}`
-}
-
-const FETCH_MODE_HINT: Record<FetchMode, string> = {
-  json: 'json — 아래 주소가 JSON 을 그대로 돌려준다. 모든 경로를 JSONPath 로 적는다.',
-  html: 'html — 페이지 HTML 을 받아 파싱한다. 모든 경로를 css: 로 적는다.',
-  browser: 'browser — 브라우저로 열어야 목록이 그려진다. 모든 경로를 css: 로 적고 wait_for 를 정한다.',
 }
 
 /**
@@ -95,6 +87,7 @@ export function buildDiscoverPrompt(input: DiscoverPromptInput): string {
     `- 호스트: ${input.host} (fetch.url 은 반드시 이 호스트여야 한다)`,
     `- 받아오는 방식: ${FETCH_MODE_HINT[candidate.fetch_mode]}`,
     `- 받아올 주소 후보: ${candidate.fetch_url}`,
+    ...scriptLines(candidate),
     ...(candidate.method !== undefined && candidate.method !== 'GET'
       ? [`- 이 주소는 ${candidate.method} 로 불렸다. fetch.method 를 ${candidate.method} 로 둔다`]
       : []),

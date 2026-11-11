@@ -118,6 +118,12 @@ function toNode(el: FakeEl): HtmlNode {
 }
 
 const fakeHtml: HtmlAdapter = {
+  /**
+   * 가짜 HTML 은 JSON 트리라 `<script>` 개념이 없다. 인라인 JSON 모드 테스트는
+   * **실제 HTML 문자열**을 넣는 `scriptAdapter`(아래)를 쓴다.
+   */
+  scripts: () => [],
+
   select(html, selector) {
     let root: FakeEl
     try {
@@ -565,5 +571,128 @@ describe('컬렉션 스키마 연결', () => {
   it('mapping 을 안 주면 원값을 남긴다 — 버리지 않는다', () => {
     const out = interpretSpec(catSpec, { items: [{ name: '가', cat: '기술개발' }] }, { now: NOW })
     expect(out.items[0]?.data['category']).toBe('기술개발')
+  })
+})
+
+// ── inline_json 모드 (ADR A43) ─────────────────────────────────────────
+//
+// HTML 을 받아 `<script>` 안의 JSON 을 꺼내고, 그 위에서 JSONPath 로 읽는다.
+// 여기서 쓰는 어댑터는 `scripts()` 만 진짜로 구현한다 — CSS 평가가 끼어들 자리가 없다는 것이
+// 이 모드의 성질이고, 그게 지켜지는지도 같이 보는 셈이다.
+
+describe('interpretSpec — inline_json', () => {
+  const scriptAdapter: HtmlAdapter = {
+    select: () => [],
+    scripts(html: string) {
+      const out: { id: string | null; type: string | null; content: string }[] = []
+      const re = /<script([^>]*)>([\s\S]*?)<\/script>/gi
+      let m: RegExpExecArray | null
+      while ((m = re.exec(html)) !== null) {
+        const attrs = m[1] ?? ''
+        const content = m[2] ?? ''
+        if (content.trim() === '') continue
+        out.push({
+          id: /\bid\s*=\s*["']([^"']+)["']/i.exec(attrs)?.[1] ?? null,
+          type: /\btype\s*=\s*["']([^"']+)["']/i.exec(attrs)?.[1] ?? null,
+          content,
+        })
+      }
+      return out
+    },
+  }
+
+  const inlineSpec = spec({
+    spec_version: 1,
+    fetch: {
+      mode: 'inline_json',
+      url: 'https://example.com/list',
+      script: { kind: 'id', id: '__NEXT_DATA__' },
+    },
+    list: '$.props.pageProps.list[*]',
+    dedupe_key: '$.id',
+    fields: {
+      title: { path: '$.name', type: 'text' },
+      deadline: { path: '$.endDate', type: 'date', transform: [{ op: 'date_parse', formats: ['YYYYMMDD'] }] },
+      link: { path: '$.url', type: 'link', transform: [{ op: 'absolute_url' }] },
+    },
+  })
+
+  const page = (payload: unknown): string =>
+    `<html><head><script>var a=1;</script></head><body>
+       <ul><li>화면에 보이는 글자</li></ul>
+       <script id="__NEXT_DATA__" type="application/json">${JSON.stringify(payload)}</script>
+     </body></html>`
+
+  const html = page({
+    props: {
+      pageProps: {
+        list: [
+          { id: 'A1', name: '공고 가', endDate: '20260821', url: '/detail/A1' },
+          { id: 'A2', name: '공고 나', endDate: '20260905', url: '/detail/A2' },
+        ],
+      },
+    },
+  })
+
+  it('script 안의 JSON 에서 항목을 뽑는다 — 경로는 JSONPath 다', () => {
+    const out = interpretSpec(inlineSpec, html, { html: scriptAdapter, now: NOW })
+    expect(out.items).toHaveLength(2)
+    expect(out.items[0]?.data['title']).toBe('공고 가')
+    expect(out.items[0]?.data['deadline']).toBe('2026-08-21')
+    expect(out.items[0]?.data['link']).toBe('https://example.com/detail/A1')
+    expect(out.items[0]?.external_key).toBe('A1')
+    expect(out.items[0]?.external_key_origin).toBe('dedupe_key')
+  })
+
+  it('raw._row 는 행 객체 그대로다 (원문 대조가 json 모드와 같게 된다)', () => {
+    const out = interpretSpec(inlineSpec, html, { html: scriptAdapter, now: NOW })
+    expect(out.items[0]?.raw['_row']).toEqual({ id: 'A1', name: '공고 가', endDate: '20260821', url: '/detail/A1' })
+  })
+
+  it('이미 파싱된 payload 를 주면 그대로 읽는다 (어댑터가 필요 없다)', () => {
+    const parsed = { props: { pageProps: { list: [{ id: 'B1', name: '공고 다' }] } } }
+    const out = interpretSpec(inlineSpec, parsed, { now: NOW })
+    expect(out.items[0]?.data['title']).toBe('공고 다')
+  })
+
+  it('가리킨 script 가 없으면 던지지 않고 무엇을 못 찾았는지 말한다 (B4)', () => {
+    // script 는 있지만 __NEXT_DATA__ 가 아닌 페이지 — 사이트가 프레임워크를 바꾼 상황
+    const moved = '<html><body><script type="application/json">{"other":1}</script></body></html>'
+    const out = interpretSpec(inlineSpec, moved, { html: scriptAdapter, now: NOW })
+    expect(out.items).toHaveLength(0)
+    expect(out.warnings.join(' ')).toContain('__NEXT_DATA__')
+  })
+
+  it('script 가 아예 없는 페이지도 던지지 않는다', () => {
+    const out = interpretSpec(inlineSpec, '<html><body><p>목록 없음</p></body></html>', {
+      html: scriptAdapter,
+      now: NOW,
+    })
+    expect(out.items).toHaveLength(0)
+    expect(out.warnings.length).toBeGreaterThan(0)
+  })
+
+  it('어댑터를 안 주면 터지지 않고 연결이 안 됐다고 말한다', () => {
+    const out = interpretSpec(inlineSpec, html, { now: NOW })
+    expect(out.items).toHaveLength(0)
+    expect(out.warnings.length).toBeGreaterThan(0)
+  })
+
+  it('window 대입형(global)도 같은 해석기로 읽힌다', () => {
+    const globalSpec = spec({
+      spec_version: 1,
+      fetch: {
+        mode: 'inline_json',
+        url: 'https://example.com/list',
+        script: { kind: 'global', name: '__INITIAL_STATE__' },
+      },
+      list: '$.list[*]',
+      fields: { title: { path: '$.name', type: 'text' } },
+    })
+    const assigned = `<html><body><script>
+      window.__INITIAL_STATE__ = {"list":[{"name":"공고 가"},{"name":"공고 나"}]};
+    </script></body></html>`
+    const out = interpretSpec(globalSpec, assigned, { html: scriptAdapter, now: NOW })
+    expect(out.items.map((i) => i.data['title'])).toEqual(['공고 가', '공고 나'])
   })
 })

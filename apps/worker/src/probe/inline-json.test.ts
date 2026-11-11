@@ -111,3 +111,98 @@ describe('scanInlineJson — 기존 그릇 회귀', () => {
     expect(candidates.length).toBeGreaterThan(0)
   })
 })
+
+// ── 후보가 들고 나가는 locator (ADR A43) ───────────────────────────────
+//
+// 전에는 인라인 JSON 후보가 `fetch_mode: 'html'` 로 내려가 컴파일이 CSS 로 script 안을
+// 집으려 들었다(추출 0건). 이제 후보가 **어느 스크립트인지**를 같이 들고 나간다.
+
+describe('scanInlineJson — fetch_mode 와 locator', () => {
+  function firstCandidate(html: string) {
+    const got = scanInlineJson({ page: pageFrom(html), minRows: 3 })
+    expect(got.length).toBeGreaterThan(0)
+    return got[0]!
+  }
+
+  it('__NEXT_DATA__ 후보는 inline_json 모드 + id locator 다', () => {
+    const html = `<html><body><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({
+      props: { pageProps: { list: ROWS_EXPECTED } },
+    })}</script></body></html>`
+    const c = firstCandidate(html)
+    expect(c.fetch_mode).toBe('inline_json')
+    expect(c.source).toMatchObject({ kind: 'inline_json', locator: { kind: 'id', id: '__NEXT_DATA__', format: 'json' } })
+  })
+
+  it('__NUXT_DATA__ 후보의 locator 는 devalue 형식을 적는다', () => {
+    // 위 Nuxt 3 블록과 같은 형태 — 행이 여러 키를 가져야 목록 후보로 인정된다
+    const DEVALUE = JSON.stringify([
+      { data: 1 },
+      { list: 2 },
+      [3, 7, 11],
+      { title: 4, link: 5, date: 6 },
+      '공고 A',
+      '/board/a',
+      '2026-08-01',
+      { title: 8, link: 9, date: 10 },
+      '공고 B',
+      '/board/b',
+      '2026-08-05',
+      { title: 12, link: 13, date: 14 },
+      '공고 C',
+      '/board/c',
+      '2026-08-09',
+    ])
+    const html = `<html><body><script id="__NUXT_DATA__" type="application/json">${DEVALUE}</script></body></html>`
+    const c = firstCandidate(html)
+    expect(c.fetch_mode).toBe('inline_json')
+    expect(c.source).toMatchObject({ locator: { kind: 'id', id: '__NUXT_DATA__', format: 'devalue' } })
+  })
+
+  it('window 대입형은 global locator 다', () => {
+    const html = `<html><body><script>
+      window.__INITIAL_STATE__ = ${JSON.stringify({ list: ROWS_EXPECTED })};
+    </script></body></html>`
+    const c = firstCandidate(html)
+    expect(c.fetch_mode).toBe('inline_json')
+    expect(c.source).toMatchObject({ locator: { kind: 'global', name: '__INITIAL_STATE__' } })
+  })
+
+  it('이름 없는 application/json 은 순번을 적고, 이름 있는 것은 순번을 쓰지 않는다', () => {
+    const html = `<html><body>
+      <script type="application/json">{"noise":1}</script>
+      <script type="application/json">${JSON.stringify({ list: ROWS_EXPECTED })}</script>
+      <script id="named" type="application/json">${JSON.stringify({ list: ROWS_EXPECTED })}</script>
+    </body></html>`
+    const got = scanInlineJson({ page: pageFrom(html), minRows: 3 })
+    const anon = got.find((c) => c.source.kind === 'inline_json' && c.source.locator?.kind === 'json_script')
+    const named = got.find(
+      (c) => c.source.kind === 'inline_json' && c.source.locator?.kind === 'id' && c.source.locator.id === 'named',
+    )
+    // 이름 없는 것 중 **두 번째**가 목록이다 — 첫 번째(noise)도 세어야 순번이 맞는다
+    expect(anon?.source).toMatchObject({ locator: { kind: 'json_script', index: 1 } })
+    expect(named).toBeDefined()
+  })
+
+  it('ItemList 가 있는 ld+json 은 ld_json locator 다', () => {
+    const html = `<html><body><script type="application/ld+json">${JSON.stringify({
+      '@context': 'https://schema.org',
+      '@type': 'ItemList',
+      itemListElement: ROWS_EXPECTED.map((r, i) => ({ '@type': 'ListItem', position: i + 1, item: r })),
+    })}</script></body></html>`
+    const c = firstCandidate(html)
+    expect(c.fetch_mode).toBe('inline_json')
+    expect(c.source).toMatchObject({ locator: { kind: 'ld_json' } })
+  })
+
+  it('ItemList 가 없는 ld+json 은 가리킬 방법이 없어 html 후보로 남는다', () => {
+    const html = `<html><body><script type="application/ld+json">${JSON.stringify({
+      '@type': 'Organization',
+      employees: ROWS_EXPECTED,
+    })}</script></body></html>`
+    const got = scanInlineJson({ page: pageFrom(html), minRows: 3 })
+    if (got.length > 0) {
+      expect(got[0]?.fetch_mode).toBe('html')
+      expect(got[0]?.source).toMatchObject({ locator: null })
+    }
+  })
+})

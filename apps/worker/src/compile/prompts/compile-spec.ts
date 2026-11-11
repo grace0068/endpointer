@@ -4,6 +4,7 @@
 // 프롬프트가 할 일은 **판단** 을 돕는 것이다 — 어느 배열이 진짜 목록인가, 어느 값이 마감일인가.
 
 import type { CollectionSchemaJson, FetchMode } from '@endpointer/core'
+import type { ScriptLocator } from '@endpointer/core/spec'
 
 import { jsonBlock, KOREAN_LIST_SITE_NOTES, PATH_SYNTAX, textBlock, transformOpsSection } from './shared'
 
@@ -26,6 +27,11 @@ export interface CompileCandidateBrief {
   list_path: string
   fetch_mode: FetchMode
   fetch_url: string
+  /**
+   * inline_json 후보일 때 **어느 script 인지** (ADR A43).
+   * probe 가 이미 알고 있으므로 모델에게 맞히라고 하지 않는다 — 그대로 적으라고 준다.
+   */
+  script?: ScriptLocator
   /** 이 후보를 목격했을 때의 HTTP 메서드 (network 후보면 실제 관찰값) */
   method?: string
   /** POST 였으면 그 요청 본문 — 날짜 파라미터를 {today} 로 바꾸는 근거 */
@@ -50,10 +56,20 @@ export interface CompilePromptInput {
   previousErrors?: string[]
 }
 
-const FETCH_MODE_HINT: Record<FetchMode, string> = {
+export const FETCH_MODE_HINT: Record<FetchMode, string> = {
   json: 'json — 아래 주소가 JSON 을 그대로 돌려준다. 모든 경로를 JSONPath 로 적는다.',
+  inline_json:
+    'inline_json — 목록이 HTML 태그가 아니라 페이지 안 script 태그의 JSON 에 들어 있다. ' +
+    'HTML 을 받지만 값은 그 JSON 에서 읽으므로 **모든 경로를 JSONPath 로** 적는다 (css: 를 쓰면 거절된다). ' +
+    'fetch.script 는 아래에 적힌 값을 그대로 쓴다.',
   html: 'html — 페이지 HTML 을 받아 파싱한다. 모든 경로를 css: 로 적는다.',
   browser: 'browser — 브라우저로 열어야 목록이 그려진다. 모든 경로를 css: 로 적고 wait_for 를 정한다.',
+}
+
+/** inline_json 후보면 locator 를 그대로 적어 준다 (모델이 맞힐 일이 아니다) */
+export function scriptLines(candidate: { fetch_mode: FetchMode; script?: ScriptLocator }): string[] {
+  if (candidate.fetch_mode !== 'inline_json' || candidate.script === undefined) return []
+  return [`- fetch.script 에 그대로 넣을 값: ${JSON.stringify(candidate.script)}`]
 }
 
 export function buildCompilePrompt(input: CompilePromptInput): string {
@@ -77,6 +93,7 @@ export function buildCompilePrompt(input: CompilePromptInput): string {
     `- 호스트: ${input.host} (fetch.url 은 반드시 이 호스트여야 한다)`,
     `- 받아오는 방식: ${FETCH_MODE_HINT[candidate.fetch_mode]}`,
     `- 받아올 주소 후보: ${candidate.fetch_url}`,
+    ...scriptLines(candidate),
     '',
     '# 채워야 할 칸',
     fieldLines,

@@ -4,6 +4,7 @@
 // 그래서 후보 하나하나가 자기가 어디서 왔는지를 들고 다닌다.
 
 import type { FetchMode } from '@endpointer/core'
+import type { ScriptLocator } from '@endpointer/core/spec'
 
 /** ADR A3 의 순서 그대로. 앞에 있을수록 싸다 */
 export const PROBE_PATHS = ['inline_json', 'network', 'dom', 'browser_render'] as const
@@ -21,10 +22,16 @@ export const PROBE_PATH_LABELS: Record<ProbePath, string> = {
 export type CandidateSource =
   | {
       kind: 'inline_json'
-      /** `__NEXT_DATA__` · `__NUXT__` · `window.__INITIAL_STATE__` · `ld+json` */
+      /** 사람이 읽는 그릇 이름 — `__NEXT_DATA__` · `__NUXT__` · `ld+json` · `inline-json[0]` */
       script: string
       /** 스크립트 안에서의 위치 */
       json_path: string
+      /**
+       * 스펙에 그대로 들어가는 **기계용 지목** (ADR A43 ①).
+       * null 이면 가리킬 방법이 없는 그릇이라 inline_json 스펙이 되지 못한다
+       * (예: ItemList 가 없는 ld+json) — 그 후보의 `fetch_mode` 는 `html` 이다.
+       */
+      locator: ScriptLocator | null
     }
   | {
       kind: 'network'

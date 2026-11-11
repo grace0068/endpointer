@@ -14,6 +14,7 @@ import {
   buildAdapterSpecResponseSchema,
   parseGeminiSpecOutput,
   PROMPTABLE_TRANSFORM_OPS,
+  type ScriptLocatorInput,
   type SpecValidationOptions,
 } from '@endpointer/core/spec'
 
@@ -101,7 +102,8 @@ export async function compileSpec(input: CompileInput): Promise<CompileResult> {
       return { ok: false, reason: out.reason, message: out.message, errors: [out.message], attempts }
     }
 
-    const parsed = parseGeminiSpecOutput(repairSpecDraft(out.text), validateOpts)
+    const parsed = parseGeminiSpecOutput(repairSpecDraft(out.text, knownFacts(brief)), validateOpts)
+
     if (parsed.ok) {
       attempts.push({ n, ok: true, errors: [] })
       log.info({ host: input.host, attempt: n, mode: parsed.spec.fetch.mode }, '스펙 생성 성공')
@@ -140,11 +142,13 @@ export async function recompileSpec(
     allowPrivateHosts: input.allowPrivateHosts ?? false,
   }
 
+  const brief = toBrief(input.candidate)
+
   const prompt = buildHealPrompt({
     url: input.url,
     host: input.host,
     schema: input.schema,
-    candidate: toBrief(input.candidate),
+    candidate: brief,
     pageText: input.pageText,
     ops: PROMPTABLE_TRANSFORM_OPS,
     previousSpec: input.previousSpec,
@@ -165,7 +169,7 @@ export async function recompileSpec(
     return { ok: false, reason: out.reason, message: out.message, errors: [out.message], attempts }
   }
 
-  const parsed = parseGeminiSpecOutput(repairSpecDraft(out.text), validateOpts)
+  const parsed = parseGeminiSpecOutput(repairSpecDraft(out.text, knownFacts(brief)), validateOpts)
   if (parsed.ok) {
     attempts.push({ n: 1, ok: true, errors: [] })
     return { ok: true, spec: parsed.spec, attempts }
@@ -181,6 +185,11 @@ export async function recompileSpec(
   }
 }
 
+/** probe 가 이미 아는 것은 모델이 맞히게 하지 않는다 (ADR A43 — script 지목) */
+function knownFacts(brief: CompileCandidateBrief): { script?: ScriptLocatorInput } {
+  return brief.script !== undefined ? { script: brief.script } : {}
+}
+
 function toBrief(candidate: RankedCandidate): CompileCandidateBrief {
   return {
     origin: candidate.origin,
@@ -188,6 +197,9 @@ function toBrief(candidate: RankedCandidate): CompileCandidateBrief {
     list_path: candidate.list_path,
     fetch_mode: candidate.fetch_mode,
     fetch_url: candidate.fetch_url,
+    ...(candidate.source.kind === 'inline_json' && candidate.source.locator !== null
+      ? { script: candidate.source.locator }
+      : {}),
     keys: candidate.keys,
     // dom 후보는 행 HTML 을 보여줘야 `css:` 경로를 쓸 수 있다. 겹침률 판정에 쓰는
     // `rows`(행 텍스트)를 그대로 보여주면 LLM 이 짚을 자리가 없다.

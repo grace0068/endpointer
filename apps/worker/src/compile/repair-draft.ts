@@ -3,12 +3,15 @@
 // 왜 있나: gemini-*-lite 급 모델이 브라우저 경로 사이트에서 두 가지 실수를 거의 매번 낸다 —
 //   ① wait_for 에 'css:' 접두사를 빼먹는다 ('div.list > ul')
 //   ② pagination 을 page_param 으로 내면서 fetch.url 에 {page} 자리표시자를 안 넣는다
+//   ③ inline_json 의 script 를 객체가 아니라 이름 문자열로 낸다 ("__NEXT_DATA__") — ADR A43
 // 재생성(2회)으로는 같은 실수가 반복돼 생성 자체가 죽는다 — 실측: wevity·bizinfo·korea.kr 전멸.
 //
 // 이것은 닫힌 연산자 집합을 넓히는 것이 아니다 (원칙 ② · ADR A2 그대로).
 // 교정하는 것은 **의미가 하나로 확정되는 표기**뿐이고, 결과는 반드시 기존 관문
 // (parseDiscoveryOutput → validateSpec)을 다시 통과한다. 여기서 못 고치는 것은
 // 손대지 않고 그대로 관문에 넘겨 원래 실패 문장이 나오게 둔다.
+
+import type { ScriptLocatorInput } from '@endpointer/core/spec'
 
 const FENCE = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/
 
@@ -34,11 +37,20 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/** 우리가 이미 아는 사실. 모델이 맞히게 할 이유가 없는 값들이다 */
+export interface KnownFacts {
+  /**
+   * probe 가 찾아낸 script 지목 (ADR A43) — inline_json 후보일 때만 있다.
+   * 검증 **전** 초안에 꽂는 값이므로 입력 타입이다 (`format` 기본값은 zod 가 채운다).
+   */
+  script?: ScriptLocatorInput
+}
+
 /**
  * 스펙 초안(문자열 또는 객체)을 받아 교정된 객체를 돌려준다.
  * JSON 이 아니거나 형태가 다르면 **원본을 그대로** 돌려준다 — 실패 경로를 바꾸지 않는다.
  */
-export function repairSpecDraft(raw: unknown): unknown {
+export function repairSpecDraft(raw: unknown, known: KnownFacts = {}): unknown {
   const draft = typeof raw === 'string' ? tryParse(raw) : isRecord(raw) ? raw : null
   if (draft === null) return raw
 
@@ -53,6 +65,20 @@ export function repairSpecDraft(raw: unknown): unknown {
     !fetch.wait_for.startsWith('css:')
   ) {
     fetch.wait_for = `css:${fetch.wait_for}`
+  }
+
+  // ①-b inline_json 의 script (ADR A43)
+  if (fetch.mode === 'inline_json') {
+    // 이름만 낸 경우 — 뜻이 하나로 확정되는 표기이므로 감싼다
+    if (typeof fetch.script === 'string') {
+      const name = fetch.script.trim()
+      fetch.script = /ld\+?json/i.test(name) ? { kind: 'ld_json' } : { kind: 'id', id: name }
+    }
+    // 아예 빼먹은 경우 — **우리가 아는 값이 있을 때만** 채운다. 없으면 손대지 않고
+    // 관문(validateSpec)이 "fetch.script 가 없습니다" 로 소리 내게 둔다.
+    if (fetch.script === undefined && known.script !== undefined) {
+      fetch.script = { ...known.script }
+    }
   }
 
   // ② page_param 인데 URL 에 {page} 가 없다 — param 이름을 알면 자리표시자를 복원할 수 있다

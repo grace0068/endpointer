@@ -4,7 +4,10 @@
 // script·style·svg 안의 글자는 화면에 안 보이므로 세면 안 된다 — 인라인 JSON 을 그대로 세면
 // 후보 데이터와 100% 겹쳐서 판정이 무의미해진다.
 
+import type { InlineScript } from '@endpointer/core/spec'
 import { load } from 'cheerio'
+
+import { cheerioAdapter } from './fetchers/cheerio-adapter'
 
 /** 화면에 보이지 않는 요소들 */
 const INVISIBLE = 'script, style, noscript, svg, template, iframe, head'
@@ -12,8 +15,12 @@ const INVISIBLE = 'script, style, noscript, svg, template, iframe, head'
 export interface ExtractedPage {
   title: string | null
   text: string
-  /** `<script>` 별 내용 — 인라인 JSON 스캔이 쓴다 */
-  scripts: { id: string | null; type: string | null; content: string }[]
+  /**
+   * `<script>` 별 내용 — 인라인 JSON 스캔이 쓴다.
+   * **목록을 만드는 곳은 `cheerioAdapter.scripts` 하나다** (ADR A43 ④) — probe 가 매긴 순번과
+   * 수집 시점의 순번이 어긋나면 조용히 다른 스크립트를 읽게 되므로 스캐너를 둘로 두지 않는다.
+   */
+  scripts: InlineScript[]
 }
 
 export function extractPage(html: string): ExtractedPage {
@@ -24,13 +31,7 @@ export function extractPage(html: string): ExtractedPage {
     return { title: null, text: '', scripts: [] }
   }
 
-  const scripts: ExtractedPage['scripts'] = []
-  $('script').each((_i, el) => {
-    const node = $(el)
-    const content = node.html() ?? ''
-    if (content.trim() === '') return
-    scripts.push({ id: node.attr('id') ?? null, type: node.attr('type') ?? null, content })
-  })
+  const scripts = cheerioAdapter.scripts(html)
 
   const title = $('title').first().text().trim() || null
 

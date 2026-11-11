@@ -403,3 +403,81 @@ describe('errors 는 재생성 프롬프트에 그대로 들어갈 문장이다'
     expect(errorsOf(spec).join(' ')).toContain('필드가 하나도 없습니다')
   })
 })
+
+// ── inline_json (ADR A43) ──────────────────────────────────────────────
+
+describe('validateSpec — inline_json 모드', () => {
+  /** HTML 을 받지만 경로는 JSONPath 인 스펙 */
+  function inlineSpec(fetchExtra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      spec_version: 1,
+      fetch: {
+        mode: 'inline_json',
+        url: 'https://www.k-startup.go.kr/list',
+        script: { kind: 'id', id: '__NEXT_DATA__' },
+        ...fetchExtra,
+      },
+      list: '$.props.pageProps.list[*]',
+      fields: { title: { path: '$.title', type: 'text' } },
+      pagination: { kind: 'none' },
+    }
+  }
+
+  it('JSONPath 경로면 통과한다', () => {
+    const got = validateSpec(inlineSpec(), { host: HOST })
+    expect(got.ok).toBe(true)
+    if (got.ok) expect(got.spec.fetch.mode).toBe('inline_json')
+  })
+
+  it('script 를 빼먹으면 무엇을 적어야 하는지 말해준다', () => {
+    const spec = inlineSpec()
+    delete (spec.fetch as Record<string, unknown>).script
+    const joined = errorsOf(spec).join(' ')
+    expect(joined).toContain('fetch.script')
+    expect(joined).toContain('__NEXT_DATA__')
+  })
+
+  it('script 가 객체가 아니면 kind 목록을 알려준다', () => {
+    const joined = errorsOf(inlineSpec({ script: '__NEXT_DATA__' })).join(' ')
+    expect(joined).toContain('kind')
+  })
+
+  it('알 수 없는 kind 는 거부한다 — 닫힌 집합이다 (A43 ①)', () => {
+    expect(validateSpec(inlineSpec({ script: { kind: 'eval_me', code: '1+1' } }), { host: HOST }).ok).toBe(false)
+  })
+
+  it('CSS 경로를 쓰면 거부한다 (한 스펙에 두 문법을 섞지 않는다)', () => {
+    const spec = inlineSpec()
+    spec.list = 'css:.list > li'
+    expect(errorsOf(spec).join(' ')).toContain('JSONPath')
+  })
+
+  it('scroll 페이지네이션은 browser 전용이라 거부한다', () => {
+    const spec = inlineSpec()
+    spec.pagination = { kind: 'scroll', times: 2 }
+    expect(errorsOf(spec).join(' ')).toContain('browser')
+  })
+
+  it('page_param 은 쓸 수 있다 — {page} 자리표시자 규칙도 그대로다', () => {
+    const spec = inlineSpec()
+    spec.pagination = { kind: 'page_param', param: 'page', start: 1, max_pages: 3 }
+    expect(errorsOf(spec).join(' ')).toContain('{page}')
+
+    const withPlaceholder = inlineSpec()
+    withPlaceholder.fetch = { ...(withPlaceholder.fetch as object), url: 'https://www.k-startup.go.kr/list?page={page}' }
+    withPlaceholder.pagination = { kind: 'page_param', param: 'page', start: 1, max_pages: 3 }
+    expect(validateSpec(withPlaceholder, { host: HOST }).ok).toBe(true)
+  })
+
+  it('next_link 경로도 JSONPath 여야 한다 (A43 — 한 모드 한 문법)', () => {
+    const spec = inlineSpec()
+    spec.pagination = { kind: 'next_link', path: 'css:a.next@href', max_pages: 2 }
+    expect(errorsOf(spec).join(' ')).toContain('JSONPath')
+  })
+
+  it('다른 호스트로 나가는 것은 여전히 막는다 (SSRF 관문은 모드와 무관하다)', () => {
+    const spec = inlineSpec()
+    spec.fetch = { ...(spec.fetch as object), url: 'https://evil.example/list' }
+    expect(validateSpec(spec, { host: HOST }).ok).toBe(false)
+  })
+})

@@ -4,14 +4,28 @@
 //
 // **이 파일은 실제로 동작한다.** 브라우저도 LLM 도 필요 없다 — 정적 HTML 한 장이면 된다.
 // 여기서 뚫리면 그 사이트는 비용이 거의 0 인 소스가 된다.
+//
+// ── 후보는 1급 스펙이 된다 (ADR A43) ───────────────────────────────────
+// 전에는 여기서 찾은 후보를 `fetch_mode: 'html'` 로 내보냈다 — core 의 FetchSpec 에
+// "HTML 을 받아 script 안의 JSON 을 꺼낸다" 모드가 없었기 때문이고, 그 결과 컴파일 LLM 이
+// CSS 선택자로 script 태그 안을 집으려다 추출이 0건이 됐다.
+// 이제 `inline_json` 모드가 있으므로 **어느 스크립트인지(`ScriptLocator`)를 같이 들고 나간다.**
+// 스펙으로 가리킬 수 없는 그릇(예: ItemList 가 없는 ld+json)만 예전처럼 html 후보로 남는다.
+
+import type { ScriptLocator } from '@endpointer/core/spec'
+import { extractAssignedObject, hasItemList, resolveDevaluePayload, tryParse, unwrapFetchedBody } from '@endpointer/core/spec'
 
 import type { ArrayCandidate } from './scan'
 import { findRecordArrays, joinJsonPath } from './scan'
 import type { StaticPage } from './static'
 import type { ProbeCandidate } from './types'
 
-/** 어떤 그릇에서 나왔는지 */
-type Holder = { label: string; data: unknown }
+/**
+ * 어떤 그릇에서 나왔는지.
+ * `locator` 가 null 이면 **스펙으로 가리킬 방법이 없는 그릇**이다 — 후보 순위·필드 발견에는
+ * 쓰이지만 inline_json 스펙이 되지는 못한다 (html 후보로 내려간다).
+ */
+type Holder = { label: string; data: unknown; locator: ScriptLocator | null }
 
 export interface InlineJsonInput {
   page: StaticPage
@@ -37,11 +51,17 @@ export function scanInlineJson(input: InlineJsonInput): ProbeCandidate[] {
       out.push({
         id: `${holder.label}${arr.path}`,
         origin: 'inline_json',
-        source: { kind: 'inline_json', script: holder.label, json_path: arr.path },
+        source: {
+          kind: 'inline_json',
+          script: holder.label,
+          json_path: arr.path,
+          locator: holder.locator,
+        },
         list_path: arr.list_path,
-        // 인라인 JSON 은 페이지 안에 들어 있으므로 재수집도 페이지를 받아서 한다.
-        // (아래 파일 끝 메모 참조 — 스펙에 "html 안의 JSON" 모드가 아직 없다)
-        fetch_mode: 'html',
+        // 인라인 JSON 은 페이지 안에 들어 있으므로 재수집도 페이지를 받아서 한다 —
+        // 받는 것은 HTML 이지만 읽는 것은 JSONPath 다. 그게 inline_json 모드다 (A43).
+        // 가리킬 방법이 없는 그릇은 예전처럼 html 후보로 남는다.
+        fetch_mode: holder.locator !== null ? 'inline_json' : 'html',
         fetch_url: page.url,
         rows: arr.rows,
         keys: arr.keys,
@@ -54,18 +74,26 @@ export function scanInlineJson(input: InlineJsonInput): ProbeCandidate[] {
 }
 
 // ── 그릇 모으기 ────────────────────────────────────────────────────────
+//
+// 스크립트 목록은 `page.page.scripts` 를 쓴다 — 그 목록을 만드는 곳은
+// `cheerioAdapter.scripts` 하나이고, 수집 시점의 추출(core `extractInlineJson`)도 같은 것을 본다.
+// 그래서 여기서 매긴 순번과 수집 시점의 순번이 어긋날 수 없다 (ADR A43 ④).
 
 function collectHolders(page: StaticPage): Holder[] {
   const holders: Holder[] = []
-  let jsonIndex = 0
+  /** 이름 없는 application/json 의 순번. **core 의 json_script 필터와 같은 기준으로 센다** */
+  let anonJsonIndex = -1
 
   for (const script of page.page.scripts) {
     const type = (script.type ?? '').toLowerCase()
+    const isJsonType = type.includes('application/json') || type === 'json'
 
     // ① <script id="__NEXT_DATA__" type="application/json">
     if (script.id === '__NEXT_DATA__') {
       const data = tryParse(script.content)
-      if (data !== undefined) holders.push({ label: '__NEXT_DATA__', data })
+      if (data !== undefined) {
+        holders.push({ label: '__NEXT_DATA__', data, locator: { kind: 'id', id: '__NEXT_DATA__', format: 'json' } })
+      }
       continue
     }
 
@@ -73,26 +101,44 @@ function collectHolders(page: StaticPage): Holder[] {
     //     내용이 일반 JSON 이 아니라 devalue 배열(값들이 눕고 자리는 인덱스)이라 풀어야 한다
     if (script.id === '__NUXT_DATA__') {
       const data = resolveDevaluePayload(script.content)
-      if (data !== undefined) holders.push({ label: '__NUXT_DATA__', data })
+      if (data !== undefined) {
+        holders.push({
+          label: '__NUXT_DATA__',
+          data,
+          locator: { kind: 'id', id: '__NUXT_DATA__', format: 'devalue' },
+        })
+      }
       continue
     }
 
-    // ② <script type="application/ld+json"> — 배열일 수도, @graph 일 수도 있다
+    // ② <script type="application/ld+json"> — 배열일 수도, @graph 안일 수도 있다.
+    //    ld_json locator 는 **ItemList 를 내용으로 찾는다**(순번이 아니다 — A43 ①).
+    //    그래서 ItemList 가 없는 ld+json 은 가리킬 방법이 없다.
     if (type.includes('ld+json')) {
       const data = tryParse(script.content)
-      if (data !== undefined) holders.push({ label: 'ld+json', data })
+      if (data !== undefined) {
+        holders.push({ label: 'ld+json', data, locator: hasItemList(data) ? { kind: 'ld_json' } : null })
+      }
       continue
     }
 
     // ②-b 그 밖의 <script type="application/json"> — SvelteKit 의 data-sveltekit-fetched 가
     //     대표다: {"status":200,"body":"<JSON 문자열>"} 로 **한 번 더 싸여** 있어 벗겨서 쓴다.
     //     프레임워크를 몰라도 JSON 그릇이면 일단 들여다본다 — 목록이 아니면 스캔이 거른다.
-    if (type.includes('application/json') || type === 'json') {
+    if (isJsonType) {
+      if (script.id === null) anonJsonIndex += 1
       const data = tryParse(script.content)
       if (data !== undefined) {
-        jsonIndex += 1
-        const label = script.id !== null ? `#${script.id}` : `inline-json[${jsonIndex}]`
-        holders.push({ label, data: unwrapFetchedBody(data) ?? data })
+        const label = script.id !== null ? `#${script.id}` : `inline-json[${anonJsonIndex}]`
+        holders.push({
+          label,
+          data: unwrapFetchedBody(data) ?? data,
+          // id 가 있으면 id 로 가리키는 것이 순번보다 안정적이다
+          locator:
+            script.id !== null
+              ? { kind: 'id', id: script.id, format: 'json' }
+              : { kind: 'json_script', index: anonJsonIndex },
+        })
       }
       continue
     }
@@ -100,69 +146,11 @@ function collectHolders(page: StaticPage): Holder[] {
     // ③ window.__NUXT__ = {...} / window.__INITIAL_STATE__ = {...} / __APOLLO_STATE__
     for (const name of ASSIGNED_GLOBALS) {
       const data = extractAssignedObject(script.content, name)
-      if (data !== undefined) holders.push({ label: name, data })
+      if (data !== undefined) holders.push({ label: name, data, locator: { kind: 'global', name } })
     }
   }
 
   return holders
-}
-
-/**
- * SvelteKit 이 심는 fetch 응답 캐시 — `{status, statusText, headers, body}` 에서
- * body(JSON 문자열)를 꺼내 파싱한다. 그 모양이 아니면 null (그대로 쓰라는 뜻).
- */
-function unwrapFetchedBody(data: unknown): unknown | null {
-  if (data === null || typeof data !== 'object' || Array.isArray(data)) return null
-  const obj = data as Record<string, unknown>
-  if (typeof obj['status'] !== 'number' || typeof obj['body'] !== 'string') return null
-  const inner = tryParse(obj['body'])
-  return inner === undefined ? null : inner
-}
-
-/**
- * devalue 배열(Nuxt 3 `__NUXT_DATA__`)을 일반 객체로 되돌린다.
- *
- * 형식: 모든 값이 한 배열에 눕고, 객체의 값·배열의 원소 자리에는 그 배열의 **인덱스**가 온다.
- * 루트는 인덱스 0. 배열 원소는 전부 숫자(인덱스)이므로, 첫 원소가 문자열인 배열은
- * `["Date", …]` 같은 타입 래퍼다 — Date 는 문자열 그대로 살린다 (날짜 파서가 먹는다).
- * 음수 인덱스는 undefined·NaN 류의 특수값 표기다. 순환·깊이는 방어한다.
- */
-export function resolveDevaluePayload(content: string): unknown | undefined {
-  const arr = tryParse(content)
-  if (!Array.isArray(arr) || arr.length === 0) return undefined
-
-  const resolving = new Set<number>()
-
-  const resolve = (index: unknown, depth: number): unknown => {
-    if (typeof index !== 'number' || !Number.isInteger(index)) return undefined
-    if (index < 0 || index >= arr.length) return undefined
-    if (depth > 16 || resolving.has(index)) return undefined
-
-    const entry: unknown = arr[index]
-    if (entry === null || typeof entry !== 'object') return entry
-
-    resolving.add(index)
-    try {
-      if (Array.isArray(entry)) {
-        if (entry.length > 0 && typeof entry[0] === 'string') {
-          // 타입 래퍼. 목록 스캔에 의미 있는 것만 살리고 나머지는 버린다
-          if (entry[0] === 'Date' && typeof entry[1] === 'string') return entry[1]
-          if (entry[0] === 'Set') return entry.slice(1).map((i) => resolve(i, depth + 1))
-          return undefined
-        }
-        return entry.map((i) => resolve(i, depth + 1))
-      }
-      const out: Record<string, unknown> = {}
-      for (const [key, value] of Object.entries(entry)) {
-        out[key] = resolve(value, depth + 1)
-      }
-      return out
-    } finally {
-      resolving.delete(index)
-    }
-  }
-
-  return resolve(0, 0)
 }
 
 const ASSIGNED_GLOBALS = [
@@ -172,67 +160,6 @@ const ASSIGNED_GLOBALS = [
   '__APOLLO_STATE__',
   '__remixContext',
 ] as const
-
-function tryParse(text: string): unknown | undefined {
-  const trimmed = text.trim()
-  if (trimmed === '') return undefined
-  try {
-    return JSON.parse(trimmed)
-  } catch {
-    return undefined
-  }
-}
-
-/**
- * `window.__NUXT__ = { … }` 처럼 대입된 객체 리터럴을 꺼낸다.
- *
- * Nuxt 3 는 `window.__NUXT__=(function(a,b){…})(…)` 형태라 JSON 이 아니다. 그런 건 포기한다 —
- * 그 경우 네트워크 관찰(3단계)이 잡아준다. 여기서 코드를 실행할 생각은 하지 않는다 (원칙 ②의 정신).
- */
-export function extractAssignedObject(source: string, name: string): unknown | undefined {
-  const idx = source.indexOf(name)
-  if (idx < 0) return undefined
-
-  const eq = source.indexOf('=', idx + name.length)
-  if (eq < 0) return undefined
-
-  let i = eq + 1
-  while (i < source.length && /\s/.test(source[i] ?? '')) i += 1
-  const open = source[i]
-  if (open !== '{' && open !== '[') return undefined
-
-  const end = matchBracket(source, i)
-  if (end < 0) return undefined
-
-  return tryParse(source.slice(i, end + 1))
-}
-
-/** 문자열 리터럴과 이스케이프를 건너뛰며 짝이 되는 괄호를 찾는다 */
-function matchBracket(source: string, start: number): number {
-  const open = source[start]
-  const close = open === '{' ? '}' : ']'
-  let depth = 0
-  let quote: string | null = null
-
-  for (let i = start; i < source.length; i += 1) {
-    const ch = source[i]
-    if (quote !== null) {
-      if (ch === '\\') i += 1
-      else if (ch === quote) quote = null
-      continue
-    }
-    if (ch === '"' || ch === "'" || ch === '`') {
-      quote = ch
-      continue
-    }
-    if (ch === open) depth += 1
-    else if (ch === close) {
-      depth -= 1
-      if (depth === 0) return i
-    }
-  }
-  return -1
-}
 
 // ── ld+json ItemList ───────────────────────────────────────────────────
 
@@ -305,14 +232,9 @@ function flattenLdJson(data: unknown): { node: Record<string, unknown>; path: st
   return out
 }
 
-// ── 메모 (G1 에서 결정해야 하는 것) ────────────────────────────────────
+// ── 이관 메모 ──────────────────────────────────────────────────────────
 //
-// 인라인 JSON 후보는 **후보 순위 판정과 필드 발견에는 최고**지만, 그대로 어댑터 스펙이 되지는
-// 못한다. core 의 FetchSpec 에는 "HTML 을 받아서 그 안의 script 에서 JSON 을 꺼낸다" 모드가 없다
-// (json = 응답 자체가 JSON, html/browser = 모든 경로가 CSS).
-//
-// 그래서 지금 이 단계의 결과는 두 가지로 쓰인다:
-//   1. "이 페이지의 진짜 목록이 무엇인가" 를 확정하는 근거 (겹침률 판정 · 필드 값 원본)
-//   2. 컴파일 프롬프트의 입력 — LLM 은 이 값들을 보고 **CSS 경로로** 같은 값을 집어내면 된다
-//
-// core 에 `fetch.mode: 'json'` + `inline_script` 를 추가하면 1급 경로가 된다. G1 에서 결정한다.
+// 벗기는 함수들(`tryParse` · `unwrapFetchedBody` · `extractAssignedObject` · `resolveDevaluePayload`)은
+// **core 의 `spec/inline-script.ts` 로 옮겼다** (ADR A43). probe 와 수집이 같은 코드로 벗겨야
+// "probe 에서는 보였는데 수집에서는 안 나온다" 가 구조적으로 불가능해진다.
+// 이 파일은 그 함수들을 import 해서 쓴다 — 복사해 오지 마라.

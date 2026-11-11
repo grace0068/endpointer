@@ -15,10 +15,16 @@ export type SourceStatus = (typeof SOURCE_STATUSES)[number]
 export const SourceStatusSchema = z.enum(SOURCE_STATUSES)
 
 /**
- * 어느 경로로 뚫렸는지. probe 순서 = 내부 JSON → HTML → 브라우저 (ADR A3 · 원칙 ③).
- * G0 계약 (1)
+ * 어느 경로로 뚫렸는지. probe 순서 = 내부 JSON → 인라인 JSON → HTML → 브라우저 (ADR A3 · 원칙 ③).
+ *
+ * - `json`         응답 자체가 JSON 이다 (내부 API)
+ * - `inline_json`  HTML 을 받아 페이지 안 `<script>` 의 JSON 을 꺼낸다 (ADR A43)
+ * - `html`         HTML 을 받아 DOM 을 파싱한다
+ * - `browser`      브라우저로 열어야 목록이 그려진다
+ *
+ * **경로 문법은 이 값이 정한다** — `spec/spec.ts` 의 `pathSyntaxFor` 가 단일 출처다 (A43 ③).
  */
-export const FETCH_MODES = ['json', 'html', 'browser'] as const
+export const FETCH_MODES = ['json', 'inline_json', 'html', 'browser'] as const
 export type FetchMode = (typeof FETCH_MODES)[number]
 export const FetchModeSchema = z.enum(FETCH_MODES)
 

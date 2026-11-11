@@ -103,3 +103,59 @@ describe('repairSpecDraft — 입력 형태', () => {
     expect(repairSpecDraft([1, 2])).toEqual([1, 2])
   })
 })
+
+// ── inline_json 의 script (ADR A43) ────────────────────────────────────
+
+describe('repairSpecDraft — inline_json 의 script', () => {
+  function inlineDraft(fetchOver: Record<string, unknown>): Record<string, unknown> {
+    return {
+      spec_version: 1,
+      fetch: { mode: 'inline_json', url: 'https://example.com/list', ...fetchOver },
+      list: '$.props.list[*]',
+      columns: [{ key: 'title', label: '제목', type: 'text', path: '$.name' }],
+      pagination: { kind: 'none' },
+    }
+  }
+
+  it('이름만 낸 경우 id locator 로 감싼다 — 뜻이 하나로 확정되는 표기다', () => {
+    const out = repairSpecDraft(inlineDraft({ script: '__NEXT_DATA__' })) as { fetch: { script: unknown } }
+    expect(out.fetch.script).toEqual({ kind: 'id', id: '__NEXT_DATA__' })
+  })
+
+  it("'ld+json' 이라고 낸 경우 ld_json locator 가 된다", () => {
+    const out = repairSpecDraft(inlineDraft({ script: 'ld+json' })) as { fetch: { script: unknown } }
+    expect(out.fetch.script).toEqual({ kind: 'ld_json' })
+  })
+
+  it('빼먹었는데 probe 가 아는 값이 있으면 채운다 (모델이 맞힐 일이 아니다)', () => {
+    const out = repairSpecDraft(inlineDraft({}), { script: { kind: 'global', name: '__INITIAL_STATE__' } }) as {
+      fetch: { script: unknown }
+    }
+    expect(out.fetch.script).toEqual({ kind: 'global', name: '__INITIAL_STATE__' })
+  })
+
+  it('빼먹었고 아는 값도 없으면 **손대지 않는다** — 관문이 소리 내게 둔다', () => {
+    const out = repairSpecDraft(inlineDraft({})) as { fetch: { script?: unknown } }
+    expect(out.fetch.script).toBeUndefined()
+  })
+
+  it('이미 제대로 적힌 locator 는 건드리지 않는다', () => {
+    const given = { kind: 'json_script', index: 2 }
+    const out = repairSpecDraft(inlineDraft({ script: given }), {
+      script: { kind: 'id', id: '__NEXT_DATA__' },
+    }) as { fetch: { script: unknown } }
+    expect(out.fetch.script).toEqual(given)
+  })
+
+  it('다른 모드에서는 script 를 만들지 않는다', () => {
+    const htmlDraft = {
+      spec_version: 1,
+      fetch: { mode: 'html', url: 'https://example.com/list' },
+      list: 'css:ul > li',
+      columns: [],
+      pagination: { kind: 'none' },
+    }
+    const out = repairSpecDraft(htmlDraft, { script: { kind: 'ld_json' } }) as { fetch: { script?: unknown } }
+    expect(out.fetch.script).toBeUndefined()
+  })
+})

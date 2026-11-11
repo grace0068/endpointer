@@ -361,7 +361,9 @@ function transformOpSchemas(): GeminiSchema[] {
 
 function fieldSpecSchema(fieldType: string, label: string): GeminiSchema {
   const props: Record<string, GeminiSchema> = {
-    path: S(`'${label}' 값이 있는 위치. json 모드면 $. 로 시작하는 JSONPath, 아니면 css: 로 시작하는 CSS 선택자`),
+    path: S(
+      `'${label}' 값이 있는 위치. json·inline_json 모드면 $. 로 시작하는 JSONPath, html·browser 모드면 css: 로 시작하는 CSS 선택자`,
+    ),
     type: { type: 'STRING', enum: [fieldType], description: '이 필드의 타입' },
     transform: {
       type: 'ARRAY',
@@ -402,6 +404,52 @@ function fetchSchemas(): GeminiSchema[] {
         'url 과 같은 {today}·{today_iso} 자리표시자를 쓸 수 있다. 예: {"playDe":"{today}"}',
     ),
   }
+  // 인라인 JSON (ADR A43) — HTML 을 받지만 값은 script 안의 JSON 에서 읽는다.
+  // `script` 는 닫힌 유니온이고, Gemini 는 oneOf 를 못 먹으므로 **키를 다 펼친 객체 하나**로 준다.
+  // kind 가 무엇이냐에 따라 쓰는 키가 다르다는 것은 설명 문구가 말하고, 진짜 검사는 zod 가 한다.
+  const scriptProps: Record<string, GeminiSchema> = {
+    kind: {
+      type: 'STRING',
+      enum: ['id', 'global', 'ld_json', 'json_script'],
+      description:
+        "어느 script 인지 가리키는 방법. " +
+        "'id' = id 속성으로 찾는다(__NEXT_DATA__ 처럼) · " +
+        "'global' = window.X = {…} 로 대입된 값 · " +
+        "'ld_json' = ld+json 중 ItemList 가 있는 것(순번 불필요) · " +
+        "'json_script' = 이름 없는 application/json 중 n 번째",
+    },
+    id: S("kind 가 'id' 일 때 script 의 id 속성값. 예: __NEXT_DATA__, __NUXT_DATA__"),
+    format: {
+      type: 'STRING',
+      enum: ['json', 'devalue'],
+      description:
+        "kind 가 'id' 일 때 내용 형식. 보통 'json'. __NUXT_DATA__ 처럼 값이 한 배열에 눕고 " +
+        "자리에 인덱스가 오는 Nuxt 3 형식이면 'devalue'",
+    },
+    name: S("kind 가 'global' 일 때 전역 변수 이름. 예: __INITIAL_STATE__, __NUXT__"),
+    index: {
+      type: 'INTEGER',
+      description: "kind 가 'json_script' 일 때 몇 번째인지 (0 부터)",
+      minimum: 0,
+    },
+  }
+  const inlineJson: Record<string, GeminiSchema> = {
+    mode: {
+      type: 'STRING',
+      enum: ['inline_json'],
+      description:
+        '목록이 HTML 태그가 아니라 페이지 안 script 태그의 JSON 에 들어 있는 경우. ' +
+        '이 모드에서는 **모든 경로를 JSONPath 로** 적는다 (css: 를 쓰면 거절된다)',
+    },
+    url: S('요청할 주소. 페이지를 넘겨야 하면 {page} 자리표시자를 넣는다'),
+    script: {
+      type: 'OBJECT',
+      description: '어느 script 에서 JSON 을 꺼낼지',
+      properties: scriptProps,
+      propertyOrdering: Object.keys(scriptProps),
+      required: ['kind'],
+    },
+  }
   const html: Record<string, GeminiSchema> = {
     mode: { type: 'STRING', enum: ['html'], description: 'HTML 을 그대로 받아 파싱하는 경우' },
     url: S('요청할 주소. 페이지를 넘겨야 하면 {page} 자리표시자를 넣는다'),
@@ -414,6 +462,12 @@ function fetchSchemas(): GeminiSchema[] {
 
   return [
     { type: 'OBJECT', properties: json, propertyOrdering: Object.keys(json), required: ['mode', 'url'] },
+    {
+      type: 'OBJECT',
+      properties: inlineJson,
+      propertyOrdering: Object.keys(inlineJson),
+      required: ['mode', 'url', 'script'],
+    },
     { type: 'OBJECT', properties: html, propertyOrdering: Object.keys(html), required: ['mode', 'url'] },
     { type: 'OBJECT', properties: browser, propertyOrdering: Object.keys(browser), required: ['mode', 'url'] },
   ]
@@ -434,7 +488,7 @@ function paginationSchemas(): GeminiSchema[] {
   }
   const nextLink: Record<string, GeminiSchema> = {
     kind: { type: 'STRING', enum: ['next_link'], description: '다음 페이지 링크를 따라간다' },
-    path: S('다음 페이지 링크의 위치'),
+    path: S('다음 페이지 링크의 위치. 그 모드의 경로 문법을 따른다 (json·inline_json 은 JSONPath, html·browser 는 css:)'),
     max_pages: maxPages,
   }
   const scroll: Record<string, GeminiSchema> = {
@@ -528,7 +582,9 @@ export function buildDiscoveryResponseSchema(): GeminiSchema {
       description: '칸의 타입. 날짜는 date, 금액은 money, 원문 링크는 link',
     },
     required: { type: 'BOOLEAN', description: '항목마다 반드시 있는 값이면 true' },
-    path: S('이 값이 있는 위치. json 모드면 $. 로 시작하는 JSONPath, 아니면 css: 로 시작하는 CSS 선택자'),
+    path: S(
+      '이 값이 있는 위치. json·inline_json 모드면 $. 로 시작하는 JSONPath, html·browser 모드면 css: 로 시작하는 CSS 선택자',
+    ),
     transform: {
       type: 'ARRAY',
       // `maxItems` 금지 — 위 fieldSpecSchema 의 주석과 같은 이유 (anyOf 원소)

@@ -83,6 +83,9 @@ export async function matchFields(input: MatchInput): Promise<MatchOutcome> {
     candidateSample: sampleRows(input.candidate.row_html ?? input.candidate.rows, 6),
     url: input.url,
     fetchMode: input.candidate.fetch_mode,
+    ...(input.candidate.source.kind === 'inline_json' && input.candidate.source.locator !== null
+      ? { script: input.candidate.source.locator }
+      : {}),
   })
 
   const out = await generateJson({

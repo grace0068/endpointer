@@ -20,7 +20,7 @@
 // 그대로 둔다 — 드리프트는 보통 칸 하나에서 나고, 나머지를 건드리면 멀쩡한 칸까지 위험해진다.
 
 import type { AdapterSpec } from '@endpointer/core/spec'
-import { validateSpec } from '@endpointer/core/spec'
+import { pathSyntaxFor, validateSpec } from '@endpointer/core/spec'
 import { computeBaseline, evaluateReport, passesHealGate } from '@endpointer/core/validate'
 
 import { getConfig } from '../config'
@@ -88,6 +88,9 @@ export async function repairFieldByPastedValue(input: RepairFieldInput): Promise
     value: input.value,
     // 원래 브라우저로 열던 사이트면 여기서도 브라우저를 쓴다 (안 그러면 목록이 안 그려진다)
     skipBrowser: previousSpec.fetch.mode !== 'browser',
+    // 기존 스펙과 **같은 경로 문법**을 내는 후보만 쓴다 (ADR A43 ③).
+    // 이게 없으면 inline_json 스펙에 css: 경로가 끼어 스펙이 통째로 거절된다.
+    expectSyntax: pathSyntaxFor(previousSpec.fetch.mode),
   })
   if (!resolved.ok) return { ok: false, message: resolved.message, stage: 'trace' }
 

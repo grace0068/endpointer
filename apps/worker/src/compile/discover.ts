@@ -106,7 +106,7 @@ export async function discoverSpec(input: DiscoverInput): Promise<DiscoverResult
     }
 
     // 기계적 표기 실수(css: 누락 · {page} 누락)를 먼저 교정한다 — 관문은 그대로 통과해야 한다
-    const parsed = parseDiscoveryOutput(repairSpecDraft(out.text), {
+    const parsed = parseDiscoveryOutput(repairSpecDraft(out.text, brief.script !== undefined ? { script: brief.script } : {}), {
       host: input.host,
       ...(input.allowPrivateHosts !== undefined ? { allowPrivateHosts: input.allowPrivateHosts } : {}),
     })
@@ -144,6 +144,7 @@ function toBrief(candidate: RankedCandidate): CompileCandidateBrief {
     list_path: candidate.list_path,
     fetch_mode: candidate.fetch_mode,
     fetch_url: candidate.fetch_url,
+    ...(src.kind === 'inline_json' && src.locator !== null ? { script: src.locator } : {}),
     ...(method !== undefined ? { method } : {}),
     ...(postBody !== undefined ? { post_body: postBody } : {}),
     keys: candidate.keys,

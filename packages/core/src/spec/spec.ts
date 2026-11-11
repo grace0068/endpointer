@@ -9,10 +9,14 @@
 //   JSONPath : `$.` 로 시작한다.        예) `$.data.items[*]`, `$.pbancSn`
 //   CSS      : `css:` 접두사를 붙인다.  예) `css:.contest-list > li`
 //   속성 추출: CSS 뒤에 `@속성`.        예) `css:a@href`
-// fetch.mode 가 json 이면 모든 경로가 JSONPath, html·browser 면 모든 경로가 CSS 여야 한다.
+//
+// 어느 문법이어야 하는지는 **fetch.mode 가 정하고, 그 매핑의 단일 출처가 `pathSyntaxFor` 다** (ADR A43 ③):
+//   json · inline_json → JSONPath          html · browser → CSS
+// 불리언(`mode === 'json'`)으로 판단하지 마라 — 모드가 늘면 조용히 틀린다.
 
 import { z } from 'zod'
 import { FieldTypeSchema, FIELD_KEY_PATTERN } from '../types/collection'
+import type { FetchMode } from '../types/source'
 import { TransformPipelineSchema } from './ops'
 
 /** 현재 스펙 버전. 구조가 바뀌면 올린다 */
@@ -34,6 +38,41 @@ export function isJsonPath(path: string): boolean {
 
 export function isCssPath(path: string): boolean {
   return CSS_PATH_PATTERN.test(path)
+}
+
+// ── 모드 → 경로 문법 (단일 출처 · ADR A43 ③) ──────────────────────────
+
+/** 경로 문법 두 가지. 모드가 늘어도 문법은 이 둘뿐이다 */
+export const PATH_SYNTAXES = ['jsonpath', 'css'] as const
+export type PathSyntax = (typeof PATH_SYNTAXES)[number]
+
+/**
+ * 모드마다 어떤 경로 문법을 쓰는지. **이 표가 유일한 출처다.**
+ *
+ * 새 모드를 추가하면 여기 한 줄을 더하는 것으로 끝나야 한다 — 그래서 `Record<FetchMode, …>` 다.
+ * 타입이 빠뜨린 모드를 잡아준다.
+ */
+export const PATH_SYNTAX_BY_MODE: Record<FetchMode, PathSyntax> = {
+  json: 'jsonpath',
+  // HTML 을 받지만 값은 script 안의 JSON 에서 읽는다 — 그래서 CSS 가 아니라 JSONPath 다
+  inline_json: 'jsonpath',
+  html: 'css',
+  browser: 'css',
+}
+
+/** 이 모드의 경로 문법. `mode === 'json'` 같은 불리언 판정을 대체한다 */
+export function pathSyntaxFor(mode: FetchMode): PathSyntax {
+  return PATH_SYNTAX_BY_MODE[mode]
+}
+
+/** 그 문법인지 검사하는 함수 */
+export function pathCheckerFor(syntax: PathSyntax): (path: string) => boolean {
+  return syntax === 'jsonpath' ? isJsonPath : isCssPath
+}
+
+/** 오류 문장에 쓸 사람 말 */
+export function pathSyntaxLabel(syntax: PathSyntax): string {
+  return syntax === 'jsonpath' ? "JSONPath('$.' 로 시작)" : "CSS 경로('css:' 로 시작)"
 }
 
 /** `css:a@href` → `{ selector: 'a', attr: 'href' }`. CSS 경로가 아니면 null */
@@ -78,6 +117,56 @@ export const JsonFetchSpecSchema = z.strictObject({
   body: z.string().optional(),
 })
 
+// ── 인라인 JSON (ADR A43) ─────────────────────────────────────────────
+//
+// 어떤 사이트는 목록을 HTML 태그가 아니라 페이지 안 `<script>` 의 JSON 으로 들고 있다.
+// HTML 을 받아오지만 값은 JSONPath 로 읽어야 하는 조합이 이 모드다.
+//
+// **스펙에 적는 것은 "어느 스크립트인가" 뿐이다.** 벗기는 방법은 코드에 고정돼 있고
+// 파서는 `JSON.parse` 하나다 (`inline-script.ts`). 벗기기 규칙을 스펙에서 조립할 수 있게
+// 열면 그것이 곧 표현식 평가의 앞문이고 원칙 ②(샌드박스 불필요)가 무너진다.
+
+/** 스크립트를 가리키는 네 가지 방법. **닫힌 집합이다** (A43 ①) */
+export const ScriptLocatorSchema = z.discriminatedUnion('kind', [
+  /** `<script id="__NEXT_DATA__" type="application/json">` 처럼 id 로 찾는다 */
+  z.strictObject({
+    kind: z.literal('id'),
+    id: z.string().min(1),
+    /**
+     * 내용의 형식. `json` 은 순수 JSON(기본),
+     * `devalue` 는 Nuxt 3 `__NUXT_DATA__` 의 눕힌 배열이다 (값이 한 배열에 눕고 자리에는 인덱스가 온다).
+     */
+    format: z.enum(['json', 'devalue']).default('json'),
+  }),
+  /**
+   * `window.__INITIAL_STATE__ = {…};` 처럼 전역에 대입된 객체 리터럴.
+   * 이름 → 첫 `=` → 괄호 짝이 맞는 조각 하나 → `JSON.parse` 가 전부다.
+   * 함수 호출(`=(function(){…})()`)·문자열 연결은 JSON 이 아니므로 **못 읽고, 읽으려 하지도 않는다.**
+   */
+  z.strictObject({ kind: z.literal('global'), name: z.string().min(1) }),
+  /**
+   * `<script type="application/ld+json">` 중 **`@type` 이 `ItemList` 인 것**을 찾는다.
+   * 순번으로 가리키지 않는다 — 사이트가 스크립트 하나만 더해도 순번은 밀린다 (A43 재검토 조건 ①).
+   */
+  z.strictObject({ kind: z.literal('ld_json') }),
+  /**
+   * 이름 없는 `<script type="application/json">` 중 n 번째 (0부터).
+   * **순번이라 취약하다** — 치유(재컴파일)가 받아내는 것을 전제로 둔다 (A43 재검토 조건 ①).
+   */
+  z.strictObject({ kind: z.literal('json_script'), index: z.number().int().min(0).max(50) }),
+])
+
+export type ScriptLocator = z.infer<typeof ScriptLocatorSchema>
+export type ScriptLocatorInput = z.input<typeof ScriptLocatorSchema>
+
+/** HTML 을 받아 `script` 안의 JSON 을 꺼낸다. 모든 경로는 JSONPath 다 */
+export const InlineJsonFetchSpecSchema = z.strictObject({
+  mode: z.literal('inline_json'),
+  url: HttpUrlSchema,
+  /** 어느 스크립트에서 꺼낼지 */
+  script: ScriptLocatorSchema,
+})
+
 /** HTML 폴백 */
 export const HtmlFetchSpecSchema = z.strictObject({
   mode: z.literal('html'),
@@ -96,12 +185,14 @@ export const BrowserFetchSpecSchema = z.strictObject({
 
 export const FetchSpecSchema = z.discriminatedUnion('mode', [
   JsonFetchSpecSchema,
+  InlineJsonFetchSpecSchema,
   HtmlFetchSpecSchema,
   BrowserFetchSpecSchema,
 ])
 
 export type FetchSpec = z.infer<typeof FetchSpecSchema>
 export type JsonFetchSpec = z.infer<typeof JsonFetchSpecSchema>
+export type InlineJsonFetchSpec = z.infer<typeof InlineJsonFetchSpecSchema>
 export type HtmlFetchSpec = z.infer<typeof HtmlFetchSpecSchema>
 export type BrowserFetchSpec = z.infer<typeof BrowserFetchSpecSchema>
 
@@ -187,9 +278,10 @@ const AdapterSpecObjectSchema = z.strictObject({
  */
 export const AdapterSpecSchema = AdapterSpecObjectSchema.superRefine((spec, ctx) => {
   const mode = spec.fetch.mode
-  const wantsJsonPath = mode === 'json'
-  const expected = wantsJsonPath ? "JSONPath('$.' 로 시작)" : "CSS 경로('css:' 로 시작)"
-  const ok = wantsJsonPath ? isJsonPath : isCssPath
+  // 모드와 문법의 관계는 PATH_SYNTAX_BY_MODE 하나가 정한다 (A43 ③)
+  const syntax = pathSyntaxFor(mode)
+  const expected = pathSyntaxLabel(syntax)
+  const ok = pathCheckerFor(syntax)
 
   const check = (path: string, at: (string | number)[]): void => {
     if (!ok(path)) {

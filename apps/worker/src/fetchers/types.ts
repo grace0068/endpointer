@@ -7,7 +7,7 @@
 export type PageFetchOutcome =
   | {
       ok: true
-      /** json 모드면 파싱된 JSON, html·browser 모드면 HTML 문자열 */
+      /** json 모드면 파싱된 JSON, html·browser·inline_json 모드면 HTML 문자열 */
       payload: unknown
       finalUrl: string
       cached: boolean

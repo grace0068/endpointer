@@ -6,8 +6,9 @@
 // 사용자가 나중에 발견하는 거짓말이 되고, 그 순간 제품 신뢰가 무너진다.
 // 못 찾았다고 답하면 사용자에게 그 칸만 물어보면 된다 (보장선 B1).
 
-import type { CollectionSchemaJson } from '@endpointer/core'
-import { buildTransformPipelineSchema, PROMPTABLE_TRANSFORM_OPS } from '@endpointer/core/spec'
+import type { CollectionSchemaJson, FetchMode } from '@endpointer/core'
+import type { ScriptLocator } from '@endpointer/core/spec'
+import { buildTransformPipelineSchema, pathSyntaxFor, PROMPTABLE_TRANSFORM_OPS } from '@endpointer/core/spec'
 
 import { jsonBlock, KOREAN_LIST_SITE_NOTES, PATH_SYNTAX, transformOpsSection } from './shared'
 
@@ -31,8 +32,10 @@ export interface MatchPromptInput {
   candidateSample: unknown[]
   /** 새 사이트 주소 */
   url: string
-  /** 새 후보의 fetch 모드 (경로 문법이 갈린다) */
-  fetchMode: 'json' | 'html' | 'browser'
+  /** 새 후보의 fetch 모드 (경로 문법이 갈린다 — 모드 집합은 core 가 소유한다) */
+  fetchMode: FetchMode
+  /** inline_json 후보면 어느 script 인지 (ADR A43) */
+  script?: ScriptLocator
 }
 
 export function buildMatchPrompt(input: MatchPromptInput): string {
@@ -50,7 +53,13 @@ export function buildMatchPrompt(input: MatchPromptInput): string {
     fieldLines,
     '',
     PATH_SYNTAX,
-    `이번 데이터는 ${input.fetchMode} 방식이다.`,
+    // 모드 이름만 말하면 inline_json 에서 어느 문법인지 모호하다 — **문법을 못 박는다** (A43 ③)
+    `이번 데이터는 ${input.fetchMode} 방식이다. 경로는 ${
+      pathSyntaxFor(input.fetchMode) === 'jsonpath' ? '$. 로 시작하는 JSONPath' : 'css: 로 시작하는 CSS 선택자'
+    } 로 적는다.`,
+    ...(input.script !== undefined
+      ? [`이 사이트는 페이지 안 script 의 JSON 에서 읽는다 (fetch.script: ${JSON.stringify(input.script)}).`]
+      : []),
     '',
     transformOpsSection(PROMPTABLE_TRANSFORM_OPS),
     '',

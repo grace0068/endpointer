@@ -28,7 +28,8 @@ function node(text: string, attrs: Record<string, string> = {}, html = ''): Html
 }
 
 function stubAdapter(bySelector: Record<string, HtmlNode[]>): HtmlAdapter {
-  return { select: (_html, selector) => bySelector[selector] ?? [] }
+  // `scripts` 는 CSS 평가 테스트와 무관하다 — 인라인 JSON 쪽은 inline-script.test.ts 가 본다
+  return { select: (_html, selector) => bySelector[selector] ?? [], scripts: () => [] }
 }
 
 // ── JSONPath 파싱 ──────────────────────────────────────────────────────
@@ -245,6 +246,16 @@ describe('checkPathSyntax — 실행 전 계약 검사가 쓰는 판정', () => 
   it('html 모드에 JSONPath 를 쓰면 어디가 틀렸는지 말한다', () => {
     const message = checkPathSyntax('$.title', 'html', "'title' 필드의 경로")
     expect(message).toContain('CSS')
+  })
+
+  it('inline_json 모드는 JSONPath 를 쓴다 — HTML 을 받지만 값은 JSON 이다 (ADR A43 ③)', () => {
+    expect(checkPathSyntax('$.props.list[*]', 'inline_json', "'list' 경로")).toBeNull()
+  })
+
+  it('inline_json 모드에 CSS 를 쓰면 거절한다', () => {
+    const message = checkPathSyntax('css:.tit', 'inline_json', "'title' 필드의 경로")
+    expect(message).toContain('JSONPath')
+    expect(message).toContain('inline_json')
   })
 
   it('json 모드에서 문법이 깨진 JSONPath 도 잡는다', () => {

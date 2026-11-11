@@ -46,7 +46,16 @@ export const PATH_SYNTAX = `
   쓸 수 없는 것: 재귀 하강(\`..\`), 필터(\`?()\`), 슬라이스(\`[1:3]\`), 함수
 - HTML 에서 뽑을 때: \`css:\` 를 붙인 CSS 선택자. 예) \`css:.contest-list > li\`
   속성을 뽑을 때는 뒤에 \`@속성\`. 예) \`css:a@href\`
-- fetch.mode 가 json 이면 **모든 경로가** JSONPath, html·browser 면 **모든 경로가** CSS 여야 한다. 섞을 수 없다.
+- 어느 문법을 쓰는지는 fetch.mode 가 정한다. **섞을 수 없다** — 한 스펙 안의 모든 경로가 같은 문법이어야 한다.
+
+  | fetch.mode | 경로 문법 |
+  |---|---|
+  | json | JSONPath |
+  | inline_json | **JSONPath** (HTML 을 받지만 값은 script 안의 JSON 에서 읽는다) |
+  | html | CSS (\`css:\`) |
+  | browser | CSS (\`css:\`) |
+
+- inline_json 모드에서 \`css:\` 경로를 쓰면 거절된다. 반대로 html 모드에서 \`$.\` 경로를 써도 거절된다.
 - 항목별 경로(fields, dedupe_key)는 list 로 집은 **항목 하나를 기준으로** 적는다.
 `.trim()
 

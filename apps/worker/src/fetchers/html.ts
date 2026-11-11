@@ -1,14 +1,18 @@
-// fetch.mode = 'html' — 정적 HTML 폴백 (기획서 11장 HTML 모드)
+// fetch.mode = 'html' · 'inline_json' — 정적 HTML 을 받는다 (기획서 11장 HTML 모드 · ADR A43)
 //
-// payload 는 HTML **문자열** 이다. 해석기가 CSS 경로를 적용할 때
-// 우리가 주입한 cheerio HtmlAdapter 를 쓴다 (cheerio-adapter.ts 참조).
+// payload 는 HTML **문자열** 이다. 받는 방법이 둘에서 같기 때문에 이 함수 하나가 둘을 담당한다 —
+// 다른 것은 "그 문자열을 어떻게 읽느냐" 이고 그건 core 해석기의 몫이다
+// (html = CSS 경로, inline_json = script 안 JSON 을 꺼내 JSONPath).
 
-import type { HtmlFetchSpec } from '@endpointer/core/spec'
+import type { HtmlFetchSpec, InlineJsonFetchSpec } from '@endpointer/core/spec'
 
 import { httpGet } from './http'
 import type { PageFetchOutcome } from './types'
 
-export async function fetchHtmlPayload(_fetchSpec: HtmlFetchSpec, url: string): Promise<PageFetchOutcome> {
+export async function fetchHtmlPayload(
+  _fetchSpec: HtmlFetchSpec | InlineJsonFetchSpec,
+  url: string,
+): Promise<PageFetchOutcome> {
   const res = await httpGet(url, {
     accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
   })

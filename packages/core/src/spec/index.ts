@@ -8,6 +8,7 @@
 // 층위:
 //   spec.ts / ops.ts   무엇이 유효한 스펙인가 (계약 · 다른 곳에서 소유)
 //   paths.ts           경로를 값으로
+//   inline-script.ts   페이지 안 script 에서 JSON 을 꺼낸다 (ADR A43)
 //   transform.ts       연산자 닫힌 집합의 실행
 //   interpret.ts       스펙 + payload → 아이템 배열 + 필드 통계
 //   validate.ts        실행 전 계약 검사 (SSRF 방어 포함)
@@ -16,6 +17,7 @@
 export * from './spec'
 export * from './ops'
 export * from './paths'
+export * from './inline-script'
 export * from './transform'
 export * from './interpret'
 export * from './validate'

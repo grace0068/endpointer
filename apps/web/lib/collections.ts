@@ -7,6 +7,7 @@
 
 import {
   CollectionSchemaJsonSchema,
+  FETCH_MODES,
   type CollectionResponse,
   type CollectionSchemaJson,
   type FetchMode,
@@ -122,7 +123,8 @@ function toFields(value: unknown): CollectionSchemaJson {
 
 const VISIBILITIES = new Set(['private', 'unlisted', 'public'])
 const STATUSES = new Set(['ok', 'healing', 'needs_attention', 'paused'])
-const MODES = new Set(['json', 'html', 'browser'])
+// 손으로 적지 않는다 — 모드 집합은 core 가 소유한다 (ADR A43 으로 inline_json 이 늘었다)
+const MODES = new Set<string>(FETCH_MODES)
 
 /**
  * postgres.js 는 timestamptz 를 Date 가 아니라 **문자열**로 돌려준다 (기본 파서 없음).

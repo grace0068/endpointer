@@ -7,7 +7,7 @@
 
 import { load, type CheerioAPI } from 'cheerio'
 
-import type { HtmlAdapter, HtmlNode } from '@endpointer/core/spec'
+import type { HtmlAdapter, HtmlNode, InlineScript } from '@endpointer/core/spec'
 
 /**
  * `$(...)` 가 돌려주는 선택 결과.
@@ -81,6 +81,30 @@ export const cheerioAdapter: HtmlAdapter = {
     const out: HtmlNode[] = []
     found.each((_i, el) => {
       out.push(new CheerioHtmlNode($, $(el) as unknown as Selection))
+    })
+    return out
+  },
+
+  /**
+   * 페이지 안 `<script>` 목록 (ADR A43 ④ — 인라인 JSON 모드의 입력).
+   *
+   * **이 저장소에서 script 를 긁는 곳은 여기 하나다.** probe 의 후보 생성과 수집 시점의
+   * 추출이 같은 목록을 보기 때문에, 순번으로 가리킨 스크립트가 서로 달라지는 사고가 없다.
+   * 내용이 빈 것(외부 src 스크립트)은 빼고 준다 — 순번 세기에 끼면 안 된다.
+   */
+  scripts(html: string): InlineScript[] {
+    let $: CheerioAPI
+    try {
+      $ = apiFor(html)
+    } catch {
+      return []
+    }
+    const out: InlineScript[] = []
+    $('script').each((_i, el) => {
+      const node = $(el)
+      const content = node.html() ?? ''
+      if (content.trim() === '') return
+      out.push({ id: node.attr('id') ?? null, type: node.attr('type') ?? null, content })
     })
     return out
   },

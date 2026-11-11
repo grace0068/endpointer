@@ -18,7 +18,8 @@
 // 로 주입받는다. 그러면 미리보기(web)·정기 수집(worker)·테스트가 **같은 해석기**를 쓴다.
 // 기획서 8장 "미리보기가 거짓말하지 않는다" 가 이 주입점 하나로 보장된다.
 
-import { isCssPath, isJsonPath, parseCssPath } from './spec'
+import type { FetchMode } from '../types/source'
+import { isCssPath, isJsonPath, parseCssPath, pathSyntaxFor } from './spec'
 
 // ── HTML 평가 주입점 ───────────────────────────────────────────────────
 
@@ -38,13 +39,30 @@ export interface HtmlNode {
   html(): string
 }
 
+/** 페이지 안 `<script>` 하나 (ADR A43 ④ — 인라인 JSON 추출의 입력) */
+export interface InlineScript {
+  /** `id` 속성. 없으면 null */
+  id: string | null
+  /** `type` 속성. 없으면 null */
+  type: string | null
+  /** 태그 안의 글자 그대로 */
+  content: string
+}
+
 /**
- * HTML 문자열에 CSS 선택자를 적용하는 능력. 호출자가 주입한다.
+ * HTML 을 다루는 능력. 호출자가 주입한다.
  *
  * worker: cheerio · web 미리보기: cheerio 또는 DOMParser · 테스트: 가짜 구현.
+ *
+ * `scripts` 가 여기 있는 이유 (ADR A43 ④): 인라인 JSON 모드는 `<script>` 목록이 필요한데,
+ * core 가 문자열 스캐너를 따로 구현하면 **파서가 둘**이 된다 — probe 가 매긴 순번과
+ * 수집 시점의 순번이 어긋나 조용히 다른 스크립트를 읽는 사고가 가능해진다.
+ * 주입으로 두면 스캐너가 하나뿐이라 그 사고가 설계상 생길 수 없다.
  */
 export interface HtmlAdapter {
   select(html: string, selector: string): HtmlNode[]
+  /** 문서 순서대로의 `<script>` 목록. 내용이 빈 것은 빼고 준다 */
+  scripts(html: string): InlineScript[]
 }
 
 // ── 경로 문법 오류 ─────────────────────────────────────────────────────
@@ -265,10 +283,11 @@ export function evaluateCssPath(html: string, path: string, adapter: HtmlAdapter
  * 경로가 이 fetch 모드에서 쓸 수 있는 문법인지. 문제가 없으면 null,
  * 있으면 **재생성 프롬프트에 그대로 넣을 수 있는 한국어 문장**을 돌려준다.
  */
-export function checkPathSyntax(path: string, mode: 'json' | 'html' | 'browser', at: string): string | null {
-  if (mode === 'json') {
+export function checkPathSyntax(path: string, mode: FetchMode, at: string): string | null {
+  // 모드가 아니라 **문법**으로 가른다 — 모드가 늘어도 이 분기는 그대로다 (A43 ③)
+  if (pathSyntaxFor(mode) === 'jsonpath') {
     if (!isJsonPath(path)) {
-      return `${at}: json 모드에서는 경로가 '$.' 로 시작하는 JSONPath 여야 합니다 (받은 값: '${path}')`
+      return `${at}: ${mode} 모드에서는 경로가 '$.' 로 시작하는 JSONPath 여야 합니다 (받은 값: '${path}')`
     }
     try {
       parseJsonPath(path)

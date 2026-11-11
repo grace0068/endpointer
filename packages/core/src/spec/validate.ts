@@ -41,6 +41,7 @@ export function validateSpec(input: unknown, opts: SpecValidationOptions): SpecV
   // zod 의 discriminatedUnion 실패 메시지는 "알 수 없는 op" 를 알려주지 않고
   // "어느 갈래에도 안 맞음" 으로만 말한다. 재생성 프롬프트에 그건 쓸모가 없다.
   errors.push(...findUnknownOps(input))
+  errors.push(...checkInlineScript(input))
 
   // ── 1. 스키마 파싱 (zod 가 1차 관문) ───────────────────────────────────
   const parsed = AdapterSpecSchema.safeParse(input)
@@ -191,6 +192,36 @@ function mappedIpv4(host: string): string | null {
   if (!Number.isFinite(hi) || !Number.isFinite(lo)) return null
 
   return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`
+}
+
+// ── inline_json 의 script (ADR A43) ────────────────────────────────────
+
+/**
+ * `fetch.mode` 가 inline_json 인데 `script` 가 없거나 모양이 아닌 경우를 **zod 보다 먼저** 잡는다.
+ *
+ * zod 가 막기는 하지만 discriminatedUnion 의 실패 문장은 "어느 갈래에도 안 맞음" 으로만 말한다 —
+ * 재생성 프롬프트(기획서 11장)에 그건 쓸모가 없다. 무엇을 대신 적어야 하는지가 한 줄에 있어야 한다.
+ */
+export function checkInlineScript(input: unknown): string[] {
+  if (typeof input !== 'object' || input === null) return []
+  const fetchSpec = (input as Record<string, unknown>)['fetch']
+  if (typeof fetchSpec !== 'object' || fetchSpec === null) return []
+  const obj = fetchSpec as Record<string, unknown>
+  if (obj['mode'] !== 'inline_json') return []
+
+  const script = obj['script']
+  if (script === undefined || script === null) {
+    return [
+      "'fetch.script' 가 없습니다. inline_json 모드는 페이지 안 어느 script 에서 값을 꺼낼지 적어야 합니다 " +
+        '(예: { "kind": "id", "id": "__NEXT_DATA__" })',
+    ]
+  }
+  if (typeof script !== 'object' || Array.isArray(script)) {
+    return [
+      "'fetch.script' 는 객체여야 합니다. kind 는 'id' · 'global' · 'ld_json' · 'json_script' 중 하나입니다",
+    ]
+  }
+  return []
 }
 
 // ── 알 수 없는 op ──────────────────────────────────────────────────────

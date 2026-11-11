@@ -9,7 +9,8 @@
 // 보장선 B1("사용자는 셀렉터를 입력하지 않는다")의 실제 구현체가 이 파일이다.
 // **스텁이 아니다.**
 
-import { evaluateCssPath, evaluateJsonPath } from '@endpointer/core/spec'
+import type { FetchMode } from '@endpointer/core'
+import { evaluateCssPath, evaluateJsonPath, pathSyntaxFor } from '@endpointer/core/spec'
 import { load } from 'cheerio'
 
 import { tagWithClasses } from '../css-ident'
@@ -42,10 +43,13 @@ export interface TraceHit {
 }
 
 export interface TraceInput {
-  /** 후보의 fetch 모드. json 이면 JSONPath, 아니면 CSS 경로를 만든다 */
-  mode: 'json' | 'html' | 'browser'
   /**
-   * 항목들. json 모드면 항목 객체 배열, html·browser 모드면 **행 HTML 조각** 배열.
+   * 후보의 fetch 모드. **경로 문법은 모드가 아니라 `pathSyntaxFor` 가 정한다** (ADR A43 ③) —
+   * json·inline_json 이면 JSONPath, html·browser 면 CSS 경로를 만든다.
+   */
+  mode: FetchMode
+  /**
+   * 항목들. json·inline_json 모드면 항목 객체 배열, html·browser 모드면 **행 HTML 조각** 배열.
    * probe 후보의 `rows` 를 그대로 넣으면 된다.
    */
   rows: readonly unknown[]
@@ -67,7 +71,7 @@ export function traceValue(input: TraceInput): TraceHit[] {
 
   const maxRows = input.maxRows ?? 20
   const rows = input.rows.slice(0, maxRows)
-  const isJson = input.mode === 'json'
+  const isJson = pathSyntaxFor(input.mode) === 'jsonpath'
 
   const hits: TraceHit[] = []
   for (let i = 0; i < rows.length; i += 1) {

@@ -9,7 +9,7 @@
 
 import type { CollectionSchemaJson, FieldValidation, ValidationReport } from '@endpointer/core'
 import type { AdapterSpec, InterpretedItem } from '@endpointer/core/spec'
-import { evaluateCssPath, evaluateJsonPath, interpretSpec } from '@endpointer/core/spec'
+import { evaluateCssPath, evaluateJsonPath, extractInlineJson, interpretSpec, pathSyntaxFor } from '@endpointer/core/spec'
 import { kstToday } from '@endpointer/core/query'
 
 import { getConfig } from '../config'
@@ -50,6 +50,8 @@ export async function fetchPage(spec: AdapterSpec, url: string, now: Date = new 
         spec.fetch.body === undefined ? undefined : applyDatePlaceholders(spec.fetch.body, now)
       return fetchJsonPayload(spec.fetch, url, body)
     }
+    // inline_json 은 받는 것이 HTML 이다 — 읽는 방법만 다르다 (ADR A43)
+    case 'inline_json':
     case 'html':
       return fetchHtmlPayload(spec.fetch, url)
     case 'browser': {
@@ -162,7 +164,8 @@ function firstUrl(spec: AdapterSpec): string {
   return spec.fetch.url.replace('{page}', String(start))
 }
 
-function nextUrl(spec: AdapterSpec, pageIndex: number, payload: unknown, baseUrl: string): string | null {
+/** 다음 페이지 주소. 더 없으면 null. (테스트가 직접 부른다 — 모드별 경로 문법이 여기서 갈린다) */
+export function nextUrl(spec: AdapterSpec, pageIndex: number, payload: unknown, baseUrl: string): string | null {
   const pagination = spec.pagination
 
   if (pagination.kind === 'page_param') {
@@ -170,10 +173,10 @@ function nextUrl(spec: AdapterSpec, pageIndex: number, payload: unknown, baseUrl
   }
 
   if (pagination.kind === 'next_link') {
-    const raw =
-      spec.fetch.mode === 'json'
-        ? evaluateJsonPath(payload, pagination.path).map((v) => (typeof v === 'string' ? v : ''))
-        : evaluateCssPath(typeof payload === 'string' ? payload : '', pagination.path, cheerioAdapter)
+    // **모드가 아니라 경로 문법으로 가른다** (ADR A43 ③).
+    // inline_json 은 payload 가 HTML 문자열이지만 next_link 경로는 JSONPath 다 —
+    // 그래서 먼저 script 안의 JSON 을 꺼내고 그 위에서 평가한다.
+    const raw = nextLinkCandidates(spec, pagination.path, payload)
     const href = raw.find((v) => v.trim() !== '')
     if (href === undefined) return null
     try {
@@ -185,6 +188,26 @@ function nextUrl(spec: AdapterSpec, pageIndex: number, payload: unknown, baseUrl
 
   // none · scroll 은 한 번의 fetch 로 끝난다
   return null
+}
+
+/** next_link 경로에 걸리는 문자열들. 모드의 경로 문법에 맞는 평가기를 고른다 */
+function nextLinkCandidates(spec: AdapterSpec, path: string, payload: unknown): string[] {
+  if (pathSyntaxFor(spec.fetch.mode) === 'css') {
+    return evaluateCssPath(typeof payload === 'string' ? payload : '', path, cheerioAdapter)
+  }
+
+  let data: unknown = payload
+  if (spec.fetch.mode === 'inline_json' && typeof payload === 'string') {
+    const extracted = extractInlineJson(payload, spec.fetch.script, cheerioAdapter)
+    // 못 꺼내면 다음 페이지가 없는 것으로 본다 — 1페이지 결과는 이미 살아 있다 (원칙 ④)
+    if (!extracted.ok) return []
+    data = extracted.data
+  }
+  try {
+    return evaluateJsonPath(data, path).map((v) => (typeof v === 'string' ? v : ''))
+  } catch {
+    return []
+  }
 }
 
 // ── 통계 합치기 ────────────────────────────────────────────────────────
