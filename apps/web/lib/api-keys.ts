@@ -10,6 +10,7 @@
 
 import { generateApiKey } from '@endpointer/core/auth'
 
+import { asDate } from './collections'
 import { safeQuery, type Loaded } from './db'
 import { requireManager, type Actor } from './permissions'
 
@@ -23,7 +24,7 @@ export interface ApiKeyStatus {
 
 export async function getApiKeyStatus(collectionId: string): Promise<Loaded<ApiKeyStatus>> {
   return safeQuery(async (core) => {
-    const rows = await core.queryClient<{ api_key_hash: string | null; api_key_hint: string | null; api_key_created_at: Date | null }[]>`
+    const rows = await core.queryClient<{ api_key_hash: string | null; api_key_hint: string | null; api_key_created_at: Date | string | null }[]>`
       select api_key_hash, api_key_hint, api_key_created_at from collections where id = ${collectionId} limit 1
     `
     const row = rows[0]
@@ -31,7 +32,8 @@ export async function getApiKeyStatus(collectionId: string): Promise<Loaded<ApiK
     return {
       active,
       hint: active ? (row?.api_key_hint ?? null) : null,
-      createdAt: active ? (row?.api_key_created_at ?? null) : null,
+      // 원시 질의는 timestamptz 를 문자열로 준다 — Date 로 굳히지 않으면 연결 화면이 Intl 포맷에서 죽는다
+      createdAt: active ? asDate(row?.api_key_created_at ?? null) : null,
     }
   })
 }

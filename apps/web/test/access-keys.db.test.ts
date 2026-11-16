@@ -169,6 +169,10 @@ describe.skipIf(!status.ok)('API 키 수명주기 — 발급 · 교체 · 폐기
     // 저장된 것은 해시·앞 글자뿐 — 원문은 DB 에도 없다
     const st = await getApiKeyStatus(c.id)
     expect(st.ok && st.data).toMatchObject({ active: true, hint: first.key.slice(0, 7) })
+    // 발급 시각은 화면이 Intl 로 포맷한다 — 문자열이 그대로 오면 연결 화면이 죽었다 (전체 실행 검증이 잡음)
+    const createdAt = st.ok ? st.data.createdAt : null
+    expect(createdAt).toBeInstanceOf(Date)
+    expect(() => new Intl.DateTimeFormat('ko-KR').format(createdAt as Date)).not.toThrow()
 
     const second = await issueApiKey(c, ownerActor())
     if (!second.ok) throw new Error(second.message)
