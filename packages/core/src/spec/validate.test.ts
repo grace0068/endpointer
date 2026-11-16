@@ -178,6 +178,14 @@ describe('validateSpec — fetch.url 의 호스트 (SSRF 방어이기도 하다)
     expect(result.ok).toBe(true)
   })
 
+  it('사이트 호스트에 포트가 붙어 있어도 같은 사이트로 본다 (sources.host 는 URL.host 다)', () => {
+    expect(validateSpec(specTargeting('https://www.k-startup.go.kr:8443/api'), { host: 'www.k-startup.go.kr:8443' }).ok).toBe(true)
+    const local = validateSpec(specTargeting('http://127.0.0.1:64034/notices'), { host: '127.0.0.1:64034', allowPrivateHosts: true })
+    expect(local.ok).toBe(true)
+    // 포트를 지워도 다른 사이트는 여전히 다른 사이트다
+    expect(errorsOf(specTargeting('https://evil.example:8443/api'), 'www.k-startup.go.kr:8443').join(' ')).toContain('다른 사이트')
+  })
+
   it('URL 에 아이디·비밀번호를 넣을 수 없다', () => {
     expect(errorsOf(specTargeting('https://a:b@www.k-startup.go.kr/api')).join(' ')).toContain('비밀번호')
   })

@@ -71,7 +71,8 @@ export async function compileSpec(input: CompileInput): Promise<CompileResult> {
   const validateOpts: SpecValidationOptions = {
     host: input.host,
     schema: input.schema,
-    allowPrivateHosts: input.allowPrivateHosts ?? false,
+    // 사설망 허용은 프로세스 스위치를 따른다 (config.ts) — attach·repair 와 같은 규율
+    allowPrivateHosts: input.allowPrivateHosts ?? cfg.allowPrivateHosts,
   }
 
   const brief = toBrief(input.candidate)
@@ -150,7 +151,8 @@ export async function recompileSpec(
   const validateOpts: SpecValidationOptions = {
     host: input.host,
     schema: input.schema,
-    allowPrivateHosts: input.allowPrivateHosts ?? false,
+    // 사설망 허용은 프로세스 스위치를 따른다 (config.ts) — attach·repair 와 같은 규율
+    allowPrivateHosts: input.allowPrivateHosts ?? cfg.allowPrivateHosts,
   }
 
   const brief = toBrief(input.candidate)

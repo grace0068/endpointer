@@ -109,7 +109,8 @@ export async function discoverSpec(input: DiscoverInput): Promise<DiscoverResult
     // 기계적 표기 실수(css: 누락 · {page} 누락)를 먼저 교정한다 — 관문은 그대로 통과해야 한다
     const parsed = parseDiscoveryOutput(repairSpecDraft(out.text, brief.script !== undefined ? { script: brief.script } : {}), {
       host: input.host,
-      ...(input.allowPrivateHosts !== undefined ? { allowPrivateHosts: input.allowPrivateHosts } : {}),
+      // 사설망 허용은 프로세스 스위치를 따른다 (config.ts) — 화면 경로(HTTP)는 이 값을 넘기지 않는다
+      allowPrivateHosts: input.allowPrivateHosts ?? cfg.allowPrivateHosts,
     })
 
     // 모양은 맞아도 표본에 없는 키를 지어냈을 수 있다 — 재생성 기회가 남았을 때만 되돌린다 (ADR A45).

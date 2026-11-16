@@ -336,7 +336,9 @@ export type AdapterSpecInput = z.input<typeof AdapterSpecSchema>
 export function specTargetsHost(spec: AdapterSpec, host: string): boolean {
   try {
     const actual = new URL(spec.fetch.url.replace('{page}', '1')).hostname.toLowerCase()
-    const expected = host.toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '')
+    // sources.host 는 URL.host(포트 포함)다. 같은 사이트인지는 hostname 으로 본다 — 포트를 남기면
+    // `example.go.kr:8443` 같은 사이트는 어떤 스펙도 통과하지 못한다
+    const expected = host.toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/:\d+$/, '')
     return actual === expected || actual.endsWith(`.${expected}`) || expected.endsWith(`.${actual}`)
   } catch {
     return false
