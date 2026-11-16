@@ -42,6 +42,36 @@ export function VisibilityForm({
       <Button type="submit" size="sm" variant="outline" disabled={pending}>
         저장
       </Button>
+      {/* 실제 판정과 같은 말 (ADR A49) — 이 값은 바깥(REST·AI·모두의 컬렉션)에만 걸린다 */}
+      <dl className="mt-2 grid w-full gap-1.5 text-[12.5px] leading-relaxed text-muted">
+        {EXPLAIN.map((row) => (
+          <div key={row.value} className={row.value === current ? 'text-ink' : undefined}>
+            <dt className="inline font-semibold">{row.label}</dt>
+            <dd className="inline"> — {row.text}</dd>
+          </div>
+        ))}
+        <div className="text-faint">
+          어느 쪽이든 이 작업 화면(표·뷰·설정)은 주인과 초대받은 사람만 들어올 수 있어요.
+        </div>
+      </dl>
     </form>
   )
 }
+
+const EXPLAIN = [
+  {
+    value: 'private',
+    label: '비공개',
+    text: 'REST API·AI 연결은 API 키가 있어야 열려요. 모두의 컬렉션에 올릴 수 없고 복제도 안 돼요.',
+  },
+  {
+    value: 'unlisted',
+    label: '주소를 아는 사람',
+    text: '키 없이 주소만 알면 REST API·AI 연결로 항목을 읽을 수 있어요. 목록에 드러나지 않고 복제는 안 돼요.',
+  },
+  {
+    value: 'public',
+    label: '전체공개',
+    text: '누구나 REST API·AI 연결로 읽고, 모두의 컬렉션 상세 화면에서도 볼 수 있어요. 모두의 컬렉션에 올리면 다른 사람이 복제할 수 있어요.',
+  },
+] as const

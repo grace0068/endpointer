@@ -96,13 +96,20 @@ describe('스키마 대조 (validateViewDefinition)', () => {
     expect(r.ok).toBe(false)
   })
 
-  it('정렬·열도 스키마에 있어야 한다', () => {
+  it('정렬은 스키마에 있어야 하지만, 열(표시 설정)은 뷰를 깨뜨리지 않는다 (A47)', () => {
     const r = validateViewDefinition(
       def({ sort: [{ field: 'ghost', dir: 'asc' }], columns: ['title', 'ghost2'] }),
       FIELDS,
     )
     expect(r.ok).toBe(false)
-    expect(r.errors).toHaveLength(2)
+    expect(r.errors).toHaveLength(1)
+    expect(r.errors[0]).toContain('ghost')
+    // 열만 틀린 뷰는 멀쩡하다 — 사라진 열은 pruneViewColumns 가 표시에서 걸러낸다
+    expect(validateViewDefinition(def({ columns: ['title', 'ghost2'] }), FIELDS).ok).toBe(true)
+  })
+
+  it('내장 시각 키로 정렬할 수 있다', () => {
+    expect(validateViewDefinition(def({ sort: [{ field: 'first_seen_at', dir: 'desc' }] }), FIELDS).ok).toBe(true)
   })
 
   it('에러 문구에 내부 명사가 없다 (B2) — 화면에 그대로 나갈 수 있어야 한다', () => {

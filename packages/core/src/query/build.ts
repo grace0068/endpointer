@@ -19,13 +19,16 @@
 import { and, sql, type SQL } from 'drizzle-orm'
 
 import { items } from '../db/schema'
+import { hashString, stableStringify } from '../spec/interpret'
 import type { CollectionQuery } from '../types/api'
 import type { FieldDef } from '../types/collection'
 import {
   DEFAULT_SORT_DIRECTION,
   DEFAULT_SORT_KEY,
+  DEFAULT_SORT_SPEC,
   decodeCursor,
   isBuiltinSortKey,
+  toCollectionFilter,
   type BuiltinSortKey,
   type CursorPayload,
 } from './params'
@@ -34,6 +37,8 @@ export type SortDirection = 'asc' | 'desc'
 
 /** 숫자로 읽을 수 있는 값만 통과시키는 가드. 나머지는 NULL 이 되어 정렬 맨 뒤로 간다 */
 const NUMERIC_GUARD = '^-?[0-9]+(\\.[0-9]+)?$'
+/** 같은 가드의 JS 판 — 커서에 싣는 정렬값이 SQL 식과 **같은 규칙**으로 뽑혀야 한다 (sortValueOf) */
+const NUMERIC_GUARD_RE = new RegExp(NUMERIC_GUARD)
 
 /**
  * data_json 의 한 항목을 비교 가능한 SQL 식으로 만든다.
@@ -87,6 +92,18 @@ function builtinColumn(key: BuiltinSortKey) {
 }
 
 /**
+ * 시각 정렬 식 — **밀리초로 자른다** (ADR A46).
+ *
+ * timestamptz 는 마이크로초까지 담는데 커서는 JS Date(밀리초)로 실린다. 한 번의 수집이
+ * 한 트랜잭션의 `now()` 로 항목 수십 개를 같은 마이크로초에 넣으므로, 자르지 않으면
+ * 커서 값(.123)과 실제 값(.123456)이 영영 같아지지 않는다 — 동률 구간이 통째로 다음 페이지에서
+ * 빠진다. 정렬과 비교를 둘 다 같은 식으로 하면 동률은 id 로 깨지고 경계가 맞는다.
+ */
+function builtinExpr(key: BuiltinSortKey): SQL {
+  return sql`date_trunc('milliseconds', ${builtinColumn(key)})`
+}
+
+/**
  * `?sort=deadline` / `?sort=-amount` 를 푼다.
  * 스키마에 없는 기준은 기본값으로 떨어진다 (params.ts 가 이미 경고를 남겼다).
  */
@@ -98,7 +115,7 @@ export function resolveSort(
     key: DEFAULT_SORT_KEY,
     direction: DEFAULT_SORT_DIRECTION,
     kind: 'builtin',
-    expr: sql`${builtinColumn(DEFAULT_SORT_KEY)}`,
+    expr: builtinExpr(DEFAULT_SORT_KEY),
     nullable: false,
     field: null,
   })
@@ -113,7 +130,7 @@ export function resolveSort(
       key,
       direction,
       kind: 'builtin',
-      expr: sql`${builtinColumn(key)}`,
+      expr: builtinExpr(key),
       nullable: false,
       field: null,
     }
@@ -137,7 +154,14 @@ export function buildOrderBy(sort: ResolvedSort): SQL[] {
   return [primary, sql`${items.id} asc`]
 }
 
-/** 커서에 실을 값을 행에서 뽑는다 */
+/**
+ * 커서에 실을 값을 행에서 뽑는다. **SQL 정렬식과 같은 값이어야 한다** —
+ * 다르면 다음 페이지 조건이 엉뚱한 구간을 집어 행이 새거나 겹친다.
+ *
+ *  - 시각   : 밀리초 ISO (builtinExpr 가 밀리초로 자른다)
+ *  - 숫자 칸 : 숫자이거나 숫자꼴 문자열만 값, 나머지는 null (NUMERIC_GUARD 와 같은 규칙)
+ *  - 그 밖  : `->>` 가 내는 글자 그대로 — 숫자·불리언도 글자로 바뀐다
+ */
 export function sortValueOf(
   row: { id: string; data_json: Record<string, unknown>; first_seen_at: Date; last_seen_at: Date },
   sort: ResolvedSort,
@@ -147,8 +171,28 @@ export function sortValueOf(
     return at.toISOString()
   }
   const v = row.data_json[sort.key]
-  if (typeof v === 'string' || typeof v === 'number') return v
+  if (v === null || v === undefined) return null
+
+  const type = sort.field?.type
+  if (type === 'number' || type === 'money') {
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null
+    if (typeof v === 'string' && NUMERIC_GUARD_RE.test(v)) return Number(v)
+    return null
+  }
+  if (typeof v === 'string') return v
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v)
   return null
+}
+
+/**
+ * 조건·정렬의 지문 — 커서가 "어떤 요청의 이어보기인가" 를 기억하는 수단 (A46).
+ * 페이지 크기·커서·include 는 결과 집합을 바꾸지 않으므로 빼고, 정렬은 기본값까지 풀어서 넣는다
+ * (`sort` 를 안 준 요청과 `sort=-first_seen_at` 요청은 같은 집합·같은 순서다).
+ * 보안 장치가 아니다 — 지문을 위조해도 where 는 언제나 지금 요청의 조건으로 만들어진다.
+ */
+export function queryFingerprint(query: CollectionQuery): string {
+  const filter = toCollectionFilter(query)
+  return hashString(stableStringify({ ...filter, sort: filter.sort ?? DEFAULT_SORT_SPEC }))
 }
 
 function bindSortValue(sort: ResolvedSort, value: string | number): SQL | null {
@@ -315,7 +359,9 @@ export function buildItemsWhere(query: CollectionQuery, ctx: BuildWhereContext):
 
   if (query.q) {
     const search = searchCondition(query.q, ctx.fields)
-    if (search) conditions.push(search)
+    // 글자 칸이 없는데 검색어가 왔다 — 파싱·뷰 진단이 먼저 거른다. 그래도 여기까지 오면
+    // 검색어를 버려 **더 넓은** 결과를 내지 말고, 아무것도 안 맞는 쪽으로 닫는다 (A46)
+    conditions.push(search ?? sql`false`)
   }
 
   if (query.since) {
@@ -335,13 +381,28 @@ export interface ItemsQueryPlan {
   /** 다음 페이지 존재 여부를 알아내려고 하나 더 읽는다 */
   fetchLimit: number
   limit: number
+  /** 이 페이지의 첫 행이 전체에서 몇 번째인가 (0부터) — 커서가 실어 나른다 */
+  offset: number
+  /** 다음 커서에 실을 지문 */
+  fingerprint: string
 }
 
+/**
+ * 커서는 **이미 검증된 것**이어야 한다 (resolve.ts 가 지문까지 본다).
+ * 여기서 못 읽는 커서를 만나면 첫 페이지로 떨어지지 않고 던진다 — 조용히 처음부터
+ * 다시 주면 클라이언트는 같은 행을 두 번 받는다.
+ */
 export function planItemsQuery(query: CollectionQuery, ctx: BuildWhereContext): ItemsQueryPlan {
   const where = buildItemsWhere(query, ctx)
   const sort = resolveSort(query.sort, ctx.fields)
   const cursor = decodeCursor(query.cursor)
+  if (query.cursor !== null && cursor === null) {
+    throw new Error('검증되지 않은 커서가 조회까지 왔습니다')
+  }
   const cursorWhere = cursor ? buildCursorWhere(sort, cursor) : null
+  if (cursor !== null && cursorWhere === null) {
+    throw new Error('커서가 정렬 기준과 맞지 않습니다')
+  }
   return {
     where,
     pageWhere: cursorWhere ? allOf([where, cursorWhere]) : where,
@@ -349,5 +410,7 @@ export function planItemsQuery(query: CollectionQuery, ctx: BuildWhereContext): 
     sort,
     fetchLimit: query.limit + 1,
     limit: query.limit,
+    offset: cursor?.o ?? 0,
+    fingerprint: queryFingerprint(query),
   }
 }

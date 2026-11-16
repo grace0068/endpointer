@@ -60,6 +60,10 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        {/* 이 규칙은 Pages Router 의 `_document` 밖 폰트를 막으려는 것이다. 여기는 App Router 의 **루트
+            레이아웃**이라 모든 페이지에 이미 걸린다 — 오탐이다. next/font 로 바꾸면 빌드가 Google Fonts 에
+            접속해야 해서 택하지 않았다 (ADR A51) */}
+        {/* eslint-disable-next-line @next/next/no-page-custom-font */}
         <link
           rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap"

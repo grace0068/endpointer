@@ -5,9 +5,8 @@
 
 import { revalidatePath } from 'next/cache'
 
-import { currentUser, isAuthReady } from '@/auth'
-import { getCollectionBySlug } from '@/lib/collections'
 import { disableInviteLinks, issueInviteLink, removeMember } from '@/lib/share'
+import { managedCollection } from '@/lib/guard'
 import { inviteUrlFor } from '@/lib/urls'
 
 export interface ShareState {
@@ -17,23 +16,17 @@ export interface ShareState {
   inviteUrl: string | null
 }
 
-/** 주인 확인. 로그인 설정 전(데모)에는 통과시킨다 — actions.ts 와 같은 관례 */
+/** 주인 확인 — 공통 관문 (lib/guard · A49). 로그인 설정 전(데모)에는 통과시킨다 */
 async function ownedCollection(
   slug: string,
 ): Promise<{ ok: true; id: string; userId: string | null } | { ok: false; message: string }> {
-  const found = await getCollectionBySlug(slug)
-  if (!found.ok) return { ok: false, message: found.message }
-  if (found.data === null) {
-    return { ok: false, message: '이 컬렉션을 찾지 못했어요. 화면을 새로 고쳐 주세요.' }
+  const managed = await managedCollection(slug)
+  if (!managed.ok) return managed
+  return {
+    ok: true,
+    id: managed.collection.id,
+    userId: managed.actor.authReady ? managed.actor.userId : managed.collection.owner_id,
   }
-  if (isAuthReady) {
-    const user = await currentUser()
-    if (user === null || user.id !== found.data.owner_id) {
-      return { ok: false, message: '이 컬렉션의 주인만 바꿀 수 있어요.' }
-    }
-    return { ok: true, id: found.data.id, userId: user.id }
-  }
-  return { ok: true, id: found.data.id, userId: found.data.owner_id }
 }
 
 export async function createInviteLinkAction(
@@ -72,7 +65,7 @@ export async function disableInviteLinkAction(
   revalidatePath(`/collections/${slug}/connect`)
   return {
     status: 'done',
-    message: '초대 링크를 껐어요. 이미 함께 보는 사람은 그대로예요.',
+    message: '초대 링크를 껐어요. 이미 함께 보는 사람은 그대로예요 — 내보내려면 아래 목록에서 내보내기를 눌러 주세요.',
     inviteUrl: null,
   }
 }
@@ -92,5 +85,10 @@ export async function removeMemberAction(
   if (!result.ok) return { status: 'problem', message: result.message, inviteUrl: null }
 
   revalidatePath(`/collections/${slug}/connect`)
-  return { status: 'done', message: '내보냈어요. 다시 보려면 새 초대 링크가 필요해요.', inviteUrl: null }
+  return {
+    status: 'done',
+    message:
+      '내보냈어요. 화면에는 더 이상 못 들어와요. 다만 그 사람이 이미 아는 API 키·연결 주소는 그대로라, 그것까지 막으려면 연결 화면에서 키를 새로 만들거나 공개범위를 바꿔 주세요.',
+    inviteUrl: null,
+  }
 }

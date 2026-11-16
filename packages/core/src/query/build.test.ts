@@ -11,10 +11,13 @@ import { CollectionQuerySchema, type CollectionQuery } from '../types/api'
 import type { FieldDef } from '../types/collection'
 import {
   buildCursorWhere,
+  buildItemsWhere,
   buildOrderBy,
   escapeLikePattern,
   planItemsQuery,
+  queryFingerprint,
   resolveSort,
+  sortValueOf,
 } from './build'
 import { encodeCursor, parseCollectionQuery } from './params'
 
@@ -32,10 +35,17 @@ const FIELDS: FieldDef[] = [
 
 const COLLECTION_ID = '00000000-0000-0000-0000-0000000000c1'
 
-function plan(qs: string, sourceIds: string[] | null = null) {
-  const { query } = parseCollectionQuery(qs, FIELDS)
-  return planItemsQuery(query, { collectionId: COLLECTION_ID, fields: FIELDS, sourceIds })
+function parsed(qs: string, fields: readonly FieldDef[] = FIELDS): CollectionQuery {
+  const result = parseCollectionQuery(qs, fields)
+  if (!result.ok) throw new Error(JSON.stringify(result.problems))
+  return result.query
 }
+
+function plan(qs: string, sourceIds: string[] | null = null) {
+  return planItemsQuery(parsed(qs), { collectionId: COLLECTION_ID, fields: FIELDS, sourceIds })
+}
+
+const ROW_ID = '00000000-0000-0000-0000-00000000beef'
 
 describe('SQL 안전성', () => {
   it('필드 키와 값이 전부 파라미터로 나간다', () => {
@@ -57,9 +67,13 @@ describe('SQL 안전성', () => {
     expect(params.some((v) => typeof v === 'string' && v.includes('drop table'))).toBe(true)
   })
 
-  it('스키마에 없는 이름은 조건이 되지 않는다', () => {
-    const bare = render(plan('').where).sql
-    const withJunk = render(plan('ghost=1&ghost_gte=1').where).sql
+  it('스키마에 없는 이름은 조건이 되지 않는다 — 파싱이 거절하고, 우회해도 SQL 에 닿지 않는다', () => {
+    // 1겹: 파싱이 거절한다 (A46)
+    expect(parseCollectionQuery('ghost=1&ghost_gte=1', FIELDS).ok).toBe(false)
+    // 2겹: 파싱을 우회한 쿼리를 넣어도 화이트리스트가 거른다
+    const bare = render(buildItemsWhere(CollectionQuerySchema.parse({}), { collectionId: COLLECTION_ID, fields: FIELDS })).sql
+    const junk = CollectionQuerySchema.parse({ eq: { ghost: '1' }, gte: { ghost: 1 } })
+    const withJunk = render(buildItemsWhere(junk, { collectionId: COLLECTION_ID, fields: FIELDS })).sql
     expect(withJunk).toBe(bare)
   })
 
@@ -103,13 +117,15 @@ describe('조건 조립', () => {
     expect(params).toContain('2026-07-20')
   })
 
-  it('text 필드가 하나도 없으면 q 는 조건이 되지 않는다', () => {
+  it('text 필드가 없는데 q 가 여기까지 오면 버리지 않고 닫는다 — 더 넓은 결과가 안 나간다 (A46)', () => {
     const onlyDate: FieldDef[] = [
       { key: 'deadline', label: '마감일', type: 'date', required: false, mapping: null, value_labels: null },
     ]
-    const { query } = parseCollectionQuery('q=창업', onlyDate)
-    const p = planItemsQuery(query, { collectionId: COLLECTION_ID, fields: onlyDate })
-    expect(render(p.where).sql).not.toContain('ilike')
+    // 파싱은 이걸 거절한다(params.test). 여기서는 그 관문을 우회한 쿼리가 어떻게 되는지 본다
+    const where = buildItemsWhere(CollectionQuerySchema.parse({ q: '창업' }), { collectionId: COLLECTION_ID, fields: onlyDate })
+    const text = render(where).sql
+    expect(text).not.toContain('ilike')
+    expect(text).toContain('false')
   })
 })
 
@@ -123,42 +139,97 @@ describe('정렬과 커서', () => {
     }
   })
 
-  it('커서가 붙으면 where 가 늘어난다', () => {
-    const cursor = encodeCursor({ s: '2026-08-01', id: '00000000-0000-0000-0000-00000000beef' })
+  it('커서가 붙으면 where 가 늘어나고, 커서의 위치가 offset 이 된다', () => {
+    const fp = queryFingerprint(parsed('sort=deadline'))
+    const cursor = encodeCursor({ s: '2026-08-01', id: ROW_ID, f: fp, o: 50 })
     const p = plan(`sort=deadline&cursor=${cursor}`)
     expect(render(p.pageWhere).sql.length).toBeGreaterThan(render(p.where).sql.length)
+    expect(p.offset).toBe(50)
   })
+
+  const cursorOf = (s: string | null) => ({ v: 2 as const, s, id: ROW_ID, f: 'fp', o: 0 })
 
   it('오름차순 커서는 뒤쪽 + 동률-id + 빈 값 구간을 집는다', () => {
     const sort = resolveSort('deadline', FIELDS)
-    const where = buildCursorWhere(sort, { v: 1, s: '2026-08-01', id: 'x' })
-    const text = render(where!).sql
+    const text = render(buildCursorWhere(sort, cursorOf('2026-08-01'))!).sql
     expect(text).toContain('>')
     expect(text).toContain('is null')
   })
 
   it('내림차순 커서는 앞쪽을 집는다', () => {
     const sort = resolveSort('-deadline', FIELDS)
-    const text = render(buildCursorWhere(sort, { v: 1, s: '2026-08-01', id: 'x' })!).sql
+    const text = render(buildCursorWhere(sort, cursorOf('2026-08-01'))!).sql
     expect(text).toContain('<')
   })
 
   it('빈 값 구간에 들어온 커서는 id 로만 이어간다', () => {
     const sort = resolveSort('deadline', FIELDS)
-    const text = render(buildCursorWhere(sort, { v: 1, s: null, id: 'x' })!).sql
+    const text = render(buildCursorWhere(sort, cursorOf(null))!).sql
     expect(text).toContain('is null')
     expect(text).not.toContain('>=')
   })
 
-  it('값이 비지 않는 기준인데 커서에 값이 없으면 커서를 버린다', () => {
+  it('값이 비지 않는 기준인데 커서에 값이 없으면 쓸 수 없는 커서다', () => {
     const sort = resolveSort('-first_seen_at', FIELDS)
-    expect(buildCursorWhere(sort, { v: 1, s: null, id: 'x' })).toBeNull()
+    expect(buildCursorWhere(sort, cursorOf(null))).toBeNull()
   })
 
-  it('깨진 커서는 조건 없이 첫 페이지로 떨어진다', () => {
+  it('검증을 안 거친 깨진 커서가 조회까지 오면 처음부터 주지 않고 멈춘다 (같은 행을 두 번 주지 않는다)', () => {
     const q: CollectionQuery = CollectionQuerySchema.parse({ cursor: 'garbage' })
-    const p = planItemsQuery(q, { collectionId: COLLECTION_ID, fields: FIELDS })
-    expect(render(p.pageWhere).sql).toBe(render(p.where).sql)
+    expect(() => planItemsQuery(q, { collectionId: COLLECTION_ID, fields: FIELDS })).toThrow()
+  })
+
+  it('시각 정렬은 밀리초로 자른 값으로 정렬·비교한다 — 같은 트랜잭션의 마이크로초 동률이 새지 않게', () => {
+    const order = render(buildOrderBy(resolveSort(undefined, FIELDS))[0]!).sql
+    expect(order).toContain("date_trunc('milliseconds'")
+    const where = render(buildCursorWhere(resolveSort(undefined, FIELDS), cursorOf('2026-07-20T00:00:00.123Z'))!).sql
+    expect(where).toContain("date_trunc('milliseconds'")
+  })
+})
+
+describe('커서 정렬값은 SQL 식과 같은 규칙으로 뽑는다', () => {
+  const row = (data: Record<string, unknown>) => ({
+    id: ROW_ID,
+    data_json: data,
+    first_seen_at: new Date('2026-07-20T00:00:00.123Z'),
+    last_seen_at: new Date('2026-07-21T00:00:00.000Z'),
+  })
+
+  it('숫자 칸: 숫자꼴 문자열은 숫자, 숫자가 아닌 값은 null (NUMERIC_GUARD 와 같다)', () => {
+    const sort = resolveSort('amount', FIELDS)
+    expect(sortValueOf(row({ amount: 100 }), sort)).toBe(100)
+    expect(sortValueOf(row({ amount: '2500' }), sort)).toBe(2500)
+    expect(sortValueOf(row({ amount: '약 1억' }), sort)).toBeNull()
+    expect(sortValueOf(row({ amount: true }), sort)).toBeNull()
+  })
+
+  it('글자 칸: ->> 가 내는 글자 그대로 — 불리언·숫자도 글자가 된다', () => {
+    const sort = resolveSort('title', FIELDS)
+    expect(sortValueOf(row({ title: true }), sort)).toBe('true')
+    expect(sortValueOf(row({ title: 7 }), sort)).toBe('7')
+    expect(sortValueOf(row({ title: '' }), sort)).toBe('')
+    expect(sortValueOf(row({}), sort)).toBeNull()
+  })
+
+  it('시각: 밀리초 ISO', () => {
+    expect(sortValueOf(row({}), resolveSort('-first_seen_at', FIELDS))).toBe('2026-07-20T00:00:00.123Z')
+  })
+})
+
+describe('조건 지문', () => {
+  it('정렬을 안 준 요청과 기본 정렬을 명시한 요청은 같은 지문', () => {
+    expect(queryFingerprint(parsed(''))).toBe(queryFingerprint(parsed('sort=-first_seen_at')))
+  })
+
+  it('개수·커서·include 는 지문을 바꾸지 않는다', () => {
+    expect(queryFingerprint(parsed('category=rnd'))).toBe(queryFingerprint(parsed('category=rnd&limit=7&include=provenance')))
+  })
+
+  it('조건·정렬이 바뀌면 지문이 바뀐다', () => {
+    const base = queryFingerprint(parsed('category=rnd'))
+    expect(queryFingerprint(parsed('category=startup'))).not.toBe(base)
+    expect(queryFingerprint(parsed('category=rnd&sort=deadline'))).not.toBe(base)
+    expect(queryFingerprint(parsed('category=rnd&q=청년'))).not.toBe(base)
   })
 })
 

@@ -1,18 +1,10 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
-import {
-  flexRender,
-  getCoreRowModel,
-  getFilteredRowModel,
-  getSortedRowModel,
-  useReactTable,
-  type ColumnDef,
-  type ColumnOrderState,
-  type SortingState,
-} from '@tanstack/react-table'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { useRef, useState } from 'react'
 
-import type { ApiItem, FieldDef } from '@endpointer/core'
+import { SOURCE_COLUMN_ID, type ApiItem, type FieldDef } from '@endpointer/core'
 
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -154,245 +146,194 @@ function ValueCell({ item, field }: { item: ApiItem; field: FieldDef }) {
 }
 
 // ── 표 ───────────────────────────────────────────────────────────────────
+//
+// 이 컴포넌트는 **데이터를 거르지도 정렬하지도 않는다** (ADR A46). 받은 행을 그대로 그린다.
+// 정렬은 머리글 링크(서버 조회), 검색·출처는 필터 바(서버 조회)다. 브라우저에 200개를 받아
+// 거르던 예전 방식은 201번째부터를 검색·정렬에서 조용히 빠뜨렸다.
+//
+// 여기서 하는 것은 **표시 설정**뿐이다 — 열 순서(끌어서)와 열 보이기/숨기기. 그것도 주소의
+// `cols` 로 옮겨 적어서, 새로고침·뒤로 가기가 되살리고 "뷰 저장" 이 그대로 담는다 (A47).
+
+export interface SortLink {
+  href: string
+  /** 지금 이 열로 정렬 중이면 그 방향 */
+  dir: 'asc' | 'desc' | null
+}
 
 export interface CollectionTableProps {
   fields: readonly FieldDef[]
   items: ApiItem[]
-  /** 출처 고르기 드롭다운에 쓸 호스트 목록 */
-  hosts: readonly string[]
-  /** 열 순서를 이 컬렉션 앞으로 기억한다 (localStorage 키) */
-  storageKey: string
+  /** 보일 열과 순서 (`_source` 포함) */
+  columns: readonly string[]
+  /** 기본 열 순서 — "열 초기화" 의 기준 */
+  defaultColumns: readonly string[]
+  /** 열 id → 정렬 링크. 없는 열은 정렬할 수 없다 */
+  sortLinks: Record<string, SortLink>
+  /**
+   * 열 설정을 바꿀 때 갈 주소(현재 상태, `cols` 만 뺀 것). null 이면 열을 못 바꾼다(모두의 컬렉션 상세).
+   * 열은 결과를 바꾸지 않으므로 이어보기(cursor)는 그대로 둔다.
+   */
+  colsHrefBase: string | null
 }
 
-/**
- * 기본 열 순서 — 출처가 맨 앞, **원문 링크(link 타입)는 맨 뒤**로 민다.
- * 링크는 값이 아니라 "원문 보기" 버튼이라 가운데 끼면 표가 읽기 나빠진다.
- * 사용자가 드래그로 바꾸면 그 순서가 이긴다.
- */
-function defaultColumnOrder(fields: readonly FieldDef[]): ColumnOrderState {
-  const links: string[] = []
-  const rest: string[] = []
-  for (const f of fields) (f.type === 'link' ? links : rest).push(f.key)
-  return ['_source', ...rest, ...links]
+function withCols(base: string, cols: readonly string[] | null): string {
+  if (cols === null) return base
+  const sep = base.includes('?') ? '&' : '?'
+  return `${base}${sep}cols=${encodeURIComponent(cols.join(','))}`
 }
 
-export function CollectionTable({ fields, items, hosts, storageKey }: CollectionTableProps) {
-  const [sorting, setSorting] = useState<SortingState>([])
-  const [keyword, setKeyword] = useState('')
-  const [host, setHost] = useState<string>('')
-
-  // 열 순서 — 기본값으로 먼저 그리고(서버·첫 렌더 일치), 저장된 순서가 있으면 그 뒤에 얹는다.
-  const baseOrder = useMemo(() => defaultColumnOrder(fields), [fields])
-  const orderStoreKey = `endpointer:colorder:${storageKey}`
-  const [columnOrder, setColumnOrder] = useState<ColumnOrderState>(baseOrder)
-  const [reordered, setReordered] = useState(false)
-
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(orderStoreKey)
-      if (saved === null) return
-      const parsed = JSON.parse(saved) as unknown
-      // 스키마가 바뀌었으면(열 추가·삭제) 저장분을 버리고 기본값으로 — 유령 열이 안 생기게
-      if (
-        Array.isArray(parsed) &&
-        parsed.length === baseOrder.length &&
-        parsed.every((id) => typeof id === 'string' && baseOrder.includes(id))
-      ) {
-        setColumnOrder(parsed as ColumnOrderState)
-        setReordered(true)
-      }
-    } catch {
-      // 저장분이 깨졌으면 기본값 그대로
-    }
-  }, [orderStoreKey, baseOrder])
-
+export function CollectionTable({ fields, items, columns: serverColumns, defaultColumns, sortLinks, colsHrefBase }: CollectionTableProps) {
+  const router = useRouter()
+  // 열 바꾸기는 **바로** 보인다 — 주소를 바꾸고 서버가 다시 그릴 때까지 기다리면 체크박스가 눌러도
+  // 그대로인 것처럼 보였다(브라우저 시험이 잡았다). 서버가 새 열로 그리면 부모가 key 로 새로 만든다
+  const [columns, setColumns] = useState<readonly string[]>(serverColumns)
   const dragId = useRef<string | null>(null)
+  const byKey = new Map(fields.map((f) => [f.key, f]))
+  const editable = colsHrefBase !== null
+  const customized = JSON.stringify(columns) !== JSON.stringify(defaultColumns)
+
+  function go(cols: readonly string[] | null): void {
+    if (colsHrefBase === null) return
+    setColumns(cols ?? defaultColumns)
+    // 열 바꾸기는 기록을 쌓지 않는다 — 뒤로 가기는 조건 단위로 움직이는 편이 자연스럽다
+    router.replace(withCols(colsHrefBase, cols), { scroll: false })
+  }
 
   function moveColumn(fromId: string, toId: string): void {
     if (fromId === toId) return
-    setColumnOrder((prev) => {
-      const next = [...prev]
-      const fromIdx = next.indexOf(fromId)
-      const toIdx = next.indexOf(toId)
-      if (fromIdx < 0 || toIdx < 0) return prev
-      next.splice(fromIdx, 1)
-      next.splice(toIdx, 0, fromId)
-      try {
-        localStorage.setItem(orderStoreKey, JSON.stringify(next))
-      } catch {
-        // 저장 실패해도 이번 세션 순서는 유지된다
-      }
-      return next
-    })
-    setReordered(true)
+    const next = [...columns]
+    const fromIdx = next.indexOf(fromId)
+    const toIdx = next.indexOf(toId)
+    if (fromIdx < 0 || toIdx < 0) return
+    next.splice(fromIdx, 1)
+    next.splice(toIdx, 0, fromId)
+    go(next)
   }
 
-  function resetOrder(): void {
-    setColumnOrder(baseOrder)
-    setReordered(false)
-    try {
-      localStorage.removeItem(orderStoreKey)
-    } catch {
-      // 무시
+  function toggleColumn(id: string): void {
+    if (columns.includes(id)) {
+      if (columns.length <= 1) return // 열이 하나도 없으면 표가 아니다
+      go(columns.filter((c) => c !== id))
+    } else {
+      // 기본 순서에서의 자리로 끼워 넣는다
+      const order = defaultColumns.filter((c) => c === id || columns.includes(c))
+      go(order)
     }
   }
 
-  const data = useMemo(
-    () => (host === '' ? items : items.filter((item) => item._source === host)),
-    [items, host],
-  )
-
-  const columns = useMemo<ColumnDef<ApiItem>[]>(() => {
-    const sourceColumn: ColumnDef<ApiItem> = {
-      id: '_source',
-      header: '출처',
-      accessorFn: (row) => row._source,
-      cell: ({ row }) => (
-        <span className="flex items-center gap-1.5">
-          <Badge tone={hostTone(row.original._source)} className="font-mono font-semibold">
-            {row.original._source}
-          </Badge>
-          {isRecentlyAdded(row.original) && (
-            <Badge tone="accent" className="font-extrabold">
-              NEW
-            </Badge>
-          )}
-        </span>
-      ),
-    }
-
-    const fieldColumns: ColumnDef<ApiItem>[] = fields.map((field) => ({
-      id: field.key,
-      header: field.label,
-      accessorFn: (row) => readKey(row, field.key),
-      sortUndefined: 'last',
-      cell: ({ row }) => <ValueCell item={row.original} field={field} />,
-    }))
-
-    return [sourceColumn, ...fieldColumns]
-  }, [fields])
-
-  const table = useReactTable({
-    data,
-    columns,
-    state: { sorting, globalFilter: keyword, columnOrder },
-    onSortingChange: setSorting,
-    onColumnOrderChange: setColumnOrder,
-    onGlobalFilterChange: setKeyword,
-    globalFilterFn: (row, _columnId, filterValue) => {
-      const term = String(filterValue).trim().toLowerCase()
-      if (term === '') return true
-      return Object.values(row.original as unknown as Record<string, unknown>).some(
-        (value) => typeof value === 'string' && value.toLowerCase().includes(term),
-      )
-    },
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-  })
-
-  const rows = table.getRowModel().rows
+  const labelOf = (id: string) => (id === SOURCE_COLUMN_ID ? '출처' : (byKey.get(id)?.label ?? id))
 
   return (
     <div className="overflow-hidden rounded-card border border-border bg-surface">
-      {/* 필터 바 — 원본 DetailTable: 패널 안 상단에 붙고 아래로 표가 이어진다 */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-divider px-4 py-3">
-        <input
-          type="search"
-          value={keyword}
-          onChange={(e) => setKeyword(e.target.value)}
-          placeholder="공고 검색"
-          className={cn(
-            'h-9 min-w-48 flex-1 rounded-lg border border-border bg-raised px-3 text-sm',
-            'placeholder:text-faint focus:border-accent focus:outline-none',
+      {editable && (
+        <div className="flex flex-wrap items-center gap-3 border-b border-divider px-4 py-2.5 text-xs text-faint">
+          <details className="relative">
+            <summary className="cursor-pointer select-none font-semibold text-muted hover:text-accent">
+              열 고르기
+            </summary>
+            <div className="absolute left-0 z-30 mt-1.5 flex min-w-44 flex-col gap-1 rounded-lg border border-border bg-surface p-2.5 shadow-lg">
+              {defaultColumns.map((id) => (
+                <label key={id} className="flex items-center gap-2 text-[13px] text-ink">
+                  <input type="checkbox" checked={columns.includes(id)} onChange={() => toggleColumn(id)} />
+                  {labelOf(id)}
+                </label>
+              ))}
+            </div>
+          </details>
+          <span>머리글을 끌어 열 순서를 바꿀 수 있어요</span>
+          {customized && (
+            <button
+              type="button"
+              onClick={() => go(null)}
+              className="underline underline-offset-2 hover:text-accent"
+            >
+              열 초기화
+            </button>
           )}
-        />
-        <select
-          value={host}
-          onChange={(e) => setHost(e.target.value)}
-          aria-label="출처 고르기"
-          className="h-9 rounded-lg border border-border bg-raised px-2 text-sm"
-        >
-          <option value="">모든 출처</option>
-          {hosts.map((h) => (
-            <option key={h} value={h}>
-              {h}
-            </option>
-          ))}
-        </select>
-        {reordered && (
-          <button
-            type="button"
-            onClick={resetOrder}
-            className="text-xs text-faint underline underline-offset-2 hover:text-accent"
-          >
-            열 순서 초기화
-          </button>
-        )}
-        <span className="ml-auto font-mono text-xs text-faint">{rows.length} rows</span>
-      </div>
+        </div>
+      )}
 
       <div className="scroll-x">
         <table className="w-full border-collapse text-sm">
           <thead>
-            {table.getHeaderGroups().map((group) => (
-              <tr key={group.id} className="border-b border-divider">
-                {group.headers.map((header) => {
-                  const sorted = header.column.getIsSorted()
-                  const colId = header.column.id
-                  return (
-                    <th
-                      key={header.id}
-                      draggable
-                      onDragStart={() => {
-                        dragId.current = colId
-                      }}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => {
-                        e.preventDefault()
-                        if (dragId.current !== null) moveColumn(dragId.current, colId)
-                        dragId.current = null
-                      }}
-                      className="cursor-grab px-4 py-2.5 text-left text-[11px] font-semibold tracking-[0.07em] whitespace-nowrap text-faint uppercase active:cursor-grabbing"
-                    >
-                      <button
-                        type="button"
-                        onClick={header.column.getToggleSortingHandler()}
-                        className="flex items-center gap-1 uppercase hover:text-muted"
+            <tr className="border-b border-divider">
+              {columns.map((id) => {
+                const link = sortLinks[id]
+                return (
+                  <th
+                    key={id}
+                    draggable={editable}
+                    onDragStart={() => {
+                      dragId.current = id
+                    }}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      if (dragId.current !== null) moveColumn(dragId.current, id)
+                      dragId.current = null
+                    }}
+                    aria-sort={link?.dir === 'asc' ? 'ascending' : link?.dir === 'desc' ? 'descending' : undefined}
+                    className={cn(
+                      'px-4 py-2.5 text-left text-[11px] font-semibold tracking-[0.07em] whitespace-nowrap text-faint uppercase',
+                      editable && 'cursor-grab active:cursor-grabbing',
+                    )}
+                  >
+                    {link === undefined ? (
+                      labelOf(id)
+                    ) : (
+                      <Link
+                        href={link.href}
+                        scroll={false}
+                        title="눌러서 정렬 — 전체 항목을 서버에서 다시 정렬해요"
+                        className="flex items-center gap-1 uppercase text-faint hover:text-muted hover:no-underline"
                       >
-                        {flexRender(header.column.columnDef.header, header.getContext())}
+                        {labelOf(id)}
                         <span aria-hidden className="text-faint/70">
-                          {sorted === 'asc' ? '↑' : sorted === 'desc' ? '↓' : ''}
+                          {link.dir === 'asc' ? '↑' : link.dir === 'desc' ? '↓' : ''}
                         </span>
-                      </button>
-                    </th>
-                  )
-                })}
-              </tr>
-            ))}
+                      </Link>
+                    )}
+                  </th>
+                )
+              })}
+            </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
+            {items.map((item, rowIndex) => (
               <tr
-                key={row.id}
+                key={`${item._link ?? ''}-${item._first_seen_at}-${rowIndex}`}
                 className="border-b border-divider last:border-b-0 hover:bg-raised/40"
               >
-                {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} className="px-4 py-2.5 align-top text-[13.5px] text-ink">
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
+                {columns.map((id) => {
+                  if (id === SOURCE_COLUMN_ID) {
+                    return (
+                      <td key={id} className="px-4 py-2.5 align-top text-[13.5px] text-ink">
+                        <span className="flex items-center gap-1.5">
+                          <Badge tone={hostTone(item._source)} className="font-mono font-semibold">
+                            {item._source}
+                          </Badge>
+                          {isRecentlyAdded(item) && (
+                            <Badge tone="accent" className="font-extrabold">
+                              NEW
+                            </Badge>
+                          )}
+                        </span>
+                      </td>
+                    )
+                  }
+                  const field = byKey.get(id)
+                  if (field === undefined) return null
+                  return (
+                    <td key={id} className="px-4 py-2.5 align-top text-[13.5px] text-ink">
+                      <ValueCell item={item} field={field} />
+                    </td>
+                  )
+                })}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-
-      {rows.length === 0 && (
-        <p className="px-4 py-4 text-sm text-muted">
-          찾는 조건에 맞는 항목이 없어요. 검색어를 지우거나 출처를 전체로 바꿔보세요.
-        </p>
-      )}
     </div>
   )
 }

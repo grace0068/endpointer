@@ -125,6 +125,8 @@ export function CreateFlow({
 }) {
   // 입력칸의 현재 글자 — "담기"를 누르면 바구니로 들어간다
   const [draft, setDraft] = useState('')
+  // 살펴보는 동안 몇 번째 단계를 보여주는가 (아래 단계 연출)
+  const [activeStep, setActiveStep] = useState(0)
   // 담은 주소들. 첫 화면에서 주소를 들고 왔으면(?url=) 이미 담긴 채로 시작한다
   const [basket, setBasket] = useState<string[]>(() => {
     const seeded = initialUrl.trim()
@@ -163,12 +165,13 @@ export function CreateFlow({
     setBasket((prev) => prev.filter((u) => u !== target))
   }
 
-  // 살펴보는 동안의 단계 연출 — 마지막 단계에서 멈춰 서버 응답을 기다린다
-  const [activeStep, setActiveStep] = useState(0)
+  // 살펴보는 동안의 단계 연출 — 마지막 단계에서 멈춰 서버 응답을 기다린다.
+  // 처음으로 되돌리는 것은 "컬렉션 만들기" 를 누르는 **제출 이벤트**에서 한다(아래 form 의 onSubmit).
+  // 액션 함수 안에서 되돌리면 그 상태는 액션이 끝날 때까지 화면에 안 나온다(React 19 전환) —
+  // 브라우저 시험이 그 회귀를 잡았다. 여기는 타이머만 돈다
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
   useEffect(() => {
     if (previewPending) {
-      setActiveStep(0)
       timer.current = setInterval(
         () => setActiveStep((s) => Math.min(s + 1, PROBE_STEPS.length - 1)),
         STEP_INTERVAL_MS,
@@ -183,13 +186,17 @@ export function CreateFlow({
   const [removedKeys, setRemovedKeys] = useState<string[]>([])
   const [name, setName] = useState('')
 
+  // 새 미리보기가 오면 편집 상태를 그것에 맞춘다 — 렌더 중에 이전 미리보기와 견줘서
+  // (effect 로 하면 옛 편집 상태로 한 번 그린 뒤 다시 그린다)
   const preview = previewState.preview
-  useEffect(() => {
+  const [editedPreview, setEditedPreview] = useState(preview)
+  if (preview !== editedPreview) {
+    setEditedPreview(preview)
     if (preview) {
       setRemovedKeys([])
       setName(preview.suggestedName)
     }
-  }, [preview])
+  }
 
   const keptFields = preview ? preview.fields.filter((f) => !removedKeys.includes(f.key)) : []
 
@@ -313,7 +320,7 @@ export function CreateFlow({
               담은 사이트 {basket.length}곳
             </span>
             {/* 만들기의 실체는 미리보기 요청이다 — 대표 주소로 표를 만들어 아래에 보여준다 */}
-            <form action={previewFormAction}>
+            <form action={previewFormAction} onSubmit={() => setActiveStep(0)}>
               <input type="hidden" name="entry_url" value={leadUrl} />
               <Button type="submit" disabled={previewPending || !canBuild}>
                 {previewPending ? '만드는 중…' : '컬렉션 만들기 →'}

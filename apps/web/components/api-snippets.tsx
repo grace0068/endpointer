@@ -15,32 +15,55 @@ type Format = 'cURL' | 'JavaScript' | 'Python' | 'JSON 응답'
 
 const BASE_FORMATS: Format[] = ['cURL', 'JavaScript', 'Python']
 
-function buildSnippet(format: Format, apiUrl: string, sampleJson: string | null): string {
+/**
+ * 키는 **헤더로만** 보낸다 (ADR A48) — 주소에 실으면 프록시·접근 로그·기록에 남는다.
+ * 예시에는 실제 키 대신 환경 변수 이름을 쓴다. 키는 위 "API 키" 카드에서 한 번만 보인다.
+ * 다음 페이지는 응답의 page.next_cursor 를 cursor 로 다시 보내면 된다 — 조건은 그대로 두고.
+ */
+function buildSnippet(format: Format, apiUrl: string, sampleJson: string | null, requiresKey: boolean): string {
   switch (format) {
     case 'cURL':
-      return `curl "${apiUrl}?limit=20"`
+      return requiresKey
+        ? `curl -H "Authorization: Bearer $ENDPOINTER_API_KEY" "${apiUrl}?limit=20"`
+        : `curl "${apiUrl}?limit=20"`
     case 'JavaScript':
       return [
-        `const res = await fetch("${apiUrl}?limit=20")`,
-        `const { items, sources } = await res.json()`,
+        requiresKey
+          ? `const headers = { Authorization: \`Bearer \${process.env.ENDPOINTER_API_KEY}\` }`
+          : `const headers = {}`,
+        `const res = await fetch("${apiUrl}?limit=20", { headers })`,
+        `const { items, sources, page, error } = await res.json()`,
+        `// 더 있으면: ?limit=20&cursor=\${page.next_cursor} (조건·정렬은 그대로)`,
       ].join('\n')
     case 'Python':
       return [
-        `import requests`,
+        `import os, requests`,
         ``,
-        `r = requests.get("${apiUrl}", params={"limit": 20})`,
-        `data = r.json()`,
+        requiresKey
+          ? `headers = {"Authorization": f"Bearer {os.environ['ENDPOINTER_API_KEY']}"}`
+          : `headers = {}`,
+        `r = requests.get("${apiUrl}", params={"limit": 20}, headers=headers)`,
+        `data = r.json()  # 실패면 r.status_code 와 data["error"]["code"]`,
       ].join('\n')
     case 'JSON 응답':
       return sampleJson ?? ''
   }
 }
 
-export function ApiSnippets({ apiUrl, sampleJson }: { apiUrl: string; sampleJson: string | null }) {
+export function ApiSnippets({
+  apiUrl,
+  sampleJson,
+  requiresKey = false,
+}: {
+  apiUrl: string
+  sampleJson: string | null
+  /** 비공개 컬렉션이면 예시가 Authorization 헤더를 싣는다 */
+  requiresKey?: boolean
+}) {
   // 응답 샘플이 있을 때만 그 탭을 보인다 (빈 컬렉션이면 보여줄 응답이 없다)
   const formats: Format[] = sampleJson !== null ? [...BASE_FORMATS, 'JSON 응답'] : BASE_FORMATS
   const [format, setFormat] = useState<Format>('cURL')
-  const snippet = buildSnippet(format, apiUrl, sampleJson)
+  const snippet = buildSnippet(format, apiUrl, sampleJson, requiresKey)
 
   return (
     <div className="flex flex-col gap-2">

@@ -4,7 +4,7 @@
 // slug 는 안 바뀌므로 표 주소(?view=)와 AI 도구 연결은 그대로다 (renameViewAction 참조).
 
 import Link from 'next/link'
-import { useActionState, useEffect, useState } from 'react'
+import { useActionState, useState } from 'react'
 
 import type { ManageState } from '@/components/collection-manage'
 import { Button } from '@/components/ui/button'
@@ -27,13 +27,14 @@ export function ViewName({
   rename: (prev: ManageState, formData: FormData) => Promise<ManageState>
 }) {
   const [editing, setEditing] = useState(false)
-  const [state, action, pending] = useActionState(rename, IDLE)
+  // 저장이 통과하면 편집을 닫는다 — 새 이름은 서버 되그리기로 내려온다.
+  // 액션이 끝나는 자리에서 닫는다 (effect 로 결과를 지켜보면 렌더가 한 번 더 돈다)
+  const [state, action, pending] = useActionState(async (prev: ManageState, formData: FormData) => {
+    const next = await rename(prev, formData)
+    if (next.status === 'done') setEditing(false)
+    return next
+  }, IDLE)
   useActionToast(state)
-
-  // 저장이 통과하면 편집을 닫는다 — 새 이름은 서버 되그리기로 내려온다
-  useEffect(() => {
-    if (state.status === 'done') setEditing(false)
-  }, [state])
 
   if (editing) {
     return (

@@ -104,7 +104,7 @@ notification_log   channel_key(text) · item_id · view_ids_json · sent_at
 
 | 출구 | 계약 |
 |---|---|
-| REST | `GET /api/v1/{slug}?view={view-slug}` — 뷰 설정이 기본값, 쿼리 파라미터가 덮어쓴다 |
+| REST | `GET /api/v1/{slug}?view={view-slug}` — 뷰 설정이 기본값, 쿼리 파라미터가 덮어쓴다 **→ ADR A46 ③ 으로 대체 (2026-11-11): 파라미터는 뷰 위에 AND 로만 얹힌다 — 뷰를 넓힐 수 없다. 없는 뷰 404 · 깨진 뷰 422. `docs/api.md`** |
 | MCP | **뷰마다 도구 하나** — 도구명 = 뷰 slug, 설명 = 뷰 이름+조건 요약 (델타 2-4) |
 | 알림 | `enter` 만. 페이로드에 `view: {slug, name}` 포함. dedupe 는 채널 단위 |
 | 표 | 뷰 선택 = 저장된 필터·정렬·컬럼 적용. 편집은 표 위에서 (델타 2-10) |

@@ -115,21 +115,47 @@ export const ViewNotifySchema = z.object({
 })
 export type ViewNotify = z.infer<typeof ViewNotifySchema>
 
+/** 표시 설정에서 출처 열을 가리키는 id — 스키마 칸이 아니지만 열로 보인다 */
+export const SOURCE_COLUMN_ID = '_source'
+
+/** 검색어 상한 — REST `?q=` 와 같다 (params.ts) */
+export const MAX_SEARCH_LENGTH = 200
+
 /**
  * 저장되는 뷰 정의 (views 테이블의 jsonb 들 + 메타).
  * **health 는 여기 없다** — 읽을 때 계산해 응답에만 싣는다 (계약 §7 결정 ③).
+ *
+ * 두 층이다 (ADR A47):
+ *  - **조회 상태** `where` · `sort`(첫 항목) · `q` · `source` — 웹·REST·MCP 가 같은 뜻으로 적용한다
+ *  - **표시 설정** `columns` — 보일 열과 순서. 웹에서만 복원하고 조회 결과는 바꾸지 않는다
+ * `q`·`source` 는 A47 에서 더했다. 예전에 저장된 뷰는 없음(null) = 조건 없음이라 그대로 호환된다.
  */
 export const ViewDefinitionSchema = z.object({
   name: z.string().min(1).max(60),
   where: z.array(ViewConditionSchema).max(MAX_VIEW_CONDITIONS).default([]),
   sort: z.array(ViewSortSchema).max(3).default([]),
-  /** null = 컬렉션 기본 열 */
+  /** 글자 칸 전체 대상 검색어. null = 없음 */
+  q: z.string().trim().min(1).max(MAX_SEARCH_LENGTH).nullable().default(null),
+  /** 출처 호스트. null = 모든 출처 */
+  source: z.string().trim().min(1).max(253).nullable().default(null),
+  /** 보일 열과 순서 (`_source` 포함 가능). null = 컬렉션 기본 열 */
   columns: z.array(z.string().min(1)).min(1).nullable().default(null),
   /** null = 알림 꺼짐 (기본) */
   notify: ViewNotifySchema.nullable().default(null),
   pinned: z.boolean().default(false),
 })
 export type ViewDefinition = z.infer<typeof ViewDefinitionSchema>
+
+/**
+ * 뷰의 조회 상태 — 표의 임시 조건(URL)과 저장된 뷰가 **같은 모양**이다.
+ * 그래서 "지금 보는 것" 을 그대로 저장하고, 저장된 것을 그대로 다시 본다.
+ */
+export interface ViewQueryState {
+  where: ViewCondition[]
+  sort: ViewSort[]
+  q: string | null
+  source: string | null
+}
 
 // ── 검증 — 스키마(FieldDef[]) 대조 (A35 의 "파싱 단계에서 거부") ─────────
 
@@ -140,12 +166,18 @@ export interface ViewValidation {
 }
 
 /**
- * 조건·정렬·열이 실제 스키마와 맞는지 본다. zod(모양) 다음의 두 번째 겹이다.
+ * **조회 상태**가 실제 스키마(그리고 주면 출처 목록)와 맞는지 본다. zod(모양) 다음의 두 번째 겹이다.
  * 여기서 통과한 필드 키만 SQL 근처로 간다 — build.ts 의 화이트리스트 근거와 같은 원리.
+ *
+ * 표시 설정(`columns`)은 여기서 보지 않는다 (A47) — 사라진 열은 `pruneViewColumns` 가 걸러낼 뿐
+ * 뷰를 깨뜨리지 않는다. 표시 문제로 REST·MCP 조회까지 멈추면 안 된다.
+ *
+ * @param hosts 컬렉션의 출처 호스트들. 주면 저장된 출처가 아직 있는지까지 본다
  */
 export function validateViewDefinition(
-  def: ViewDefinition,
+  def: Pick<ViewDefinition, 'where' | 'sort'> & Partial<Pick<ViewDefinition, 'q' | 'source'>>,
   fields: readonly FieldDef[],
+  hosts?: readonly string[],
 ): ViewValidation {
   const byKey = new Map(fields.map((f) => [f.key, f]))
   const errors: string[] = []
@@ -175,15 +207,45 @@ export function validateViewDefinition(
   }
 
   for (const s of def.sort) {
-    if (!byKey.has(s.field)) errors.push(`정렬 기준 '${s.field}' 이(가) 이 표에 없어요.`)
+    if (!byKey.has(s.field) && !BUILTIN_VIEW_SORT_KEYS.includes(s.field)) {
+      errors.push(`정렬 기준 '${s.field}' 이(가) 이 표에 없어요.`)
+    }
   }
-  if (def.columns !== null) {
-    for (const c of def.columns) {
-      if (!byKey.has(c)) errors.push(`'${c}' 라는 칸이 이 표에 없어요.`)
+
+  if (def.q !== undefined && def.q !== null && !fields.some((f) => f.type === 'text')) {
+    errors.push('검색어가 저장돼 있는데 이 표에 글자 칸이 없어요.')
+  }
+
+  if (def.source !== undefined && def.source !== null && hosts !== undefined) {
+    const norm = (h: string) => h.trim().toLowerCase().replace(/^www\./, '')
+    if (!hosts.some((h) => norm(h) === norm(def.source as string))) {
+      errors.push(`저장된 출처 '${def.source}' 가 이 컬렉션에 더 이상 없어요.`)
     }
   }
 
   return { ok: errors.length === 0, errors }
+}
+
+/** 정렬에 쓸 수 있는 스키마 밖 키 — query/params.ts 의 BUILTIN_SORT_KEYS 와 같다 */
+const BUILTIN_VIEW_SORT_KEYS: readonly string[] = ['first_seen_at', 'last_seen_at']
+
+/**
+ * 표시 설정의 열 목록에서 지금 없는 열을 걸러낸다 (A47 — 뷰를 깨뜨리지 않는다).
+ * 남는 게 없으면 null(=기본 열)로 돌아간다.
+ */
+export function pruneViewColumns(
+  columns: readonly string[] | null,
+  fields: readonly FieldDef[],
+): { columns: string[] | null; dropped: string[] } {
+  if (columns === null) return { columns: null, dropped: [] }
+  const known = new Set([SOURCE_COLUMN_ID, ...fields.map((f) => f.key)])
+  const kept: string[] = []
+  const dropped: string[] = []
+  for (const c of columns) {
+    if (known.has(c) && !kept.includes(c)) kept.push(c)
+    else if (!known.has(c)) dropped.push(c)
+  }
+  return { columns: kept.length === 0 ? null : kept, dropped }
 }
 
 // ── 사람 문장 요약 (B2 — 내부 표현을 화면·도구 설명에 내보내지 않는다) ────
@@ -236,6 +298,32 @@ export function summarizeViewConditions(
   fields: readonly FieldDef[],
 ): string {
   return conds.map((c) => summarizeViewCondition(c, fields)).join(' · ')
+}
+
+/**
+ * 조회 상태 전체(칸 조건 + 검색어 + 출처 + 정렬) → 사람 문장.
+ * 화면 카드·MCP 도구 설명이 같이 쓴다 — 검색어·출처를 빼고 요약하면 도구 설명이 실제 조건보다 넓어 보인다.
+ */
+export function summarizeViewState(
+  state: Pick<ViewQueryState, 'where' | 'q' | 'source'> & { sort?: readonly ViewSort[] },
+  fields: readonly FieldDef[],
+): string {
+  const parts: string[] = []
+  const conds = summarizeViewConditions(state.where, fields)
+  if (conds !== '') parts.push(conds)
+  if (state.q !== null && state.q !== '') parts.push(`검색어 ‘${state.q}’`)
+  if (state.source !== null && state.source !== '') parts.push(`출처 ${state.source}`)
+  const first = state.sort?.[0]
+  if (first !== undefined) {
+    const label =
+      first.field === 'first_seen_at'
+        ? '처음 올라온 때'
+        : first.field === 'last_seen_at'
+          ? '마지막으로 본 때'
+          : summaryLabelOf(fields, first.field)
+    parts.push(`${label} ${first.dir === 'asc' ? '오름차순' : '내림차순'}`)
+  }
+  return parts.join(' · ')
 }
 
 // ── slug ─────────────────────────────────────────────────────────────────

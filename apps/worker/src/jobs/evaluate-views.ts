@@ -21,8 +21,15 @@
 // 24시간 안에 같은 (채널, 항목) 재발송은 막는다 (경계값이 흔들려 매 평가마다
 // 들락거리는 항목의 스팸 안전판). 재진입 자체는 새 사건이다.
 
-import { buildItemsWhere, viewToQuery } from '@endpointer/core/query'
-import type { ViewCondition, ViewSort } from '@endpointer/core'
+import {
+  buildItemsWhere,
+  hostMatches,
+  loadSourceStates,
+  parseStoredView,
+  viewToQuery,
+  type SourceStateLike,
+  type StoredViewRow,
+} from '@endpointer/core/query'
 
 import {
   db,
@@ -52,6 +59,11 @@ export interface ViewEvaluation {
   exited: string[]
   /** 알림이 걸려 있고 enter 가 있어 발송 큐에 넣었는가 */
   notified: boolean
+  /**
+   * 조건이 표 구성과 안 맞아 평가하지 않았다 (A47). 매칭 집합도 건드리지 않는다 —
+   * 사라진 칸 조건을 빼고 평가하면 더 넓게 매칭돼 원하지 않은 알림이 나간다.
+   */
+  skipped?: boolean
 }
 
 /**
@@ -68,13 +80,16 @@ export async function evaluateCollectionViews(
   const views = await listViews(collectionId)
   if (views.length === 0) return []
 
+  // 출처는 한 번 읽는다 — 뷰 판정(저장된 출처가 아직 있나)과 `source` 조건 해석에 같이 쓴다
+  const sourceRows = await loadSourceStates(db, collectionId)
+
   const results: ViewEvaluation[] = []
   /** 발송 묶음 — 항목 하나가 알림 켠 뷰 여럿에 걸리면 뷰 목록으로 합쳐진다 (A36) */
   const byItem = new Map<string, Set<string>>()
 
   for (const view of views) {
     try {
-      const evaluated = await evaluateOne(view, collection.schema_json, collectionId, now)
+      const evaluated = await evaluateOne(view, collection.schema_json, collectionId, sourceRows, now)
       results.push(evaluated)
 
       if (view.notify_json !== null && evaluated.entered.length > 0) {
@@ -100,14 +115,24 @@ async function evaluateOne(
   view: ViewRow,
   fields: import('@endpointer/core').CollectionSchemaJson,
   collectionId: string,
+  sourceRows: readonly SourceStateLike[],
   now: Date,
 ): Promise<ViewEvaluation> {
+  // 표·REST·MCP 와 **같은 판정**으로 읽는다 (A47) — 검색어·출처까지 포함한 조회 상태
+  const hosts = [...new Set(sourceRows.map((s) => s.host))]
+  const stored = parseStoredView(view as StoredViewRow, fields, hosts)
+  if (stored.health === 'broken') {
+    log.warn({ view: view.slug, problems: stored.problems }, '표 구성과 안 맞는 뷰 — 평가하지 않는다')
+    return { view_id: view.id, slug: view.slug, name: view.name, matched: 0, entered: [], exited: [], notified: false, skipped: true }
+  }
+
   // 네 출구가 타는 그 코드로 매칭 집합을 만든다 (머리말)
-  const query = viewToQuery(
-    { where: view.where_json as ViewCondition[], sort: view.sort_json as ViewSort[] },
-    now,
-  )
-  const where = buildItemsWhere(query, { collectionId, fields })
+  const query = viewToQuery(stored.state, now)
+  const sourceIds =
+    query.source === undefined
+      ? null
+      : sourceRows.filter((s) => hostMatches(s.host, query.source as string)).map((s) => s.id)
+  const where = buildItemsWhere(query, { collectionId, fields, sourceIds })
   const rows = await db.select({ id: items.id }).from(items).where(where)
   const current = new Set(rows.map((r) => r.id))
 

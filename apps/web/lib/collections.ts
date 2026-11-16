@@ -14,7 +14,7 @@ import {
   type SourceStatus,
   type Visibility,
 } from '@endpointer/core'
-import { buildCollectionResponse, parseCollectionQuery } from '@endpointer/core/query'
+import { runCollectionRequest } from '@endpointer/core/query'
 
 import { safeQuery, type Loaded } from './db'
 
@@ -386,16 +386,26 @@ export async function renameCollection(id: string, name: string): Promise<Loaded
   })
 }
 
-/** 공개범위 변경 — API 인증 방식도 이 값을 따라간다 (기획서 12장) */
+/**
+ * 공개범위 변경 — API 인증 방식도 이 값을 따라간다 (기획서 12장).
+ * **공개에서 벗어나면 모두의 컬렉션 전시도 내린다** (A49) — 남겨 두면 나중에 다시 공개하는 순간
+ * 예고 없이 갤러리에 다시 나타났다. 내렸는지는 돌려줘서 화면이 말한다.
+ */
 export async function updateCollectionVisibility(
   id: string,
   visibility: Visibility,
-): Promise<Loaded<null>> {
+): Promise<Loaded<{ unlisted: boolean }>> {
   return safeQuery(async (core) => {
-    await core.queryClient`
-      update collections set visibility = ${visibility}, updated_at = now() where id = ${id}
+    const rows = await core.queryClient<{ was_listed: boolean }[]>`
+      update collections c
+         set visibility = ${visibility},
+             listed = case when ${visibility} = 'public' then c.listed else false end,
+             updated_at = now()
+        from (select listed as was_listed from collections where id = ${id}) prev
+       where c.id = ${id}
+      returning prev.was_listed
     `
-    return null
+    return { unlisted: visibility !== 'public' && rows[0]?.was_listed === true }
   })
 }
 
@@ -416,7 +426,9 @@ export async function fetchCollectionPage(
   search: string,
 ): Promise<Loaded<CollectionResponse>> {
   return safeQuery(async (core) => {
-    const { query } = parseCollectionQuery(search, collection.schema_json)
-    return buildCollectionResponse(core.db, collection, query)
+    // 고정 문자열로만 부른다(피드·연결 샘플). 그래도 해석은 REST 와 같은 함수 (A46)
+    const outcome = await runCollectionRequest(core.db, collection, { params: search })
+    if (!outcome.ok) throw new Error(`화면 고정 조회가 거절됨: ${outcome.message}`)
+    return outcome.response
   })
 }

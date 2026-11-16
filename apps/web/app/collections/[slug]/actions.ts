@@ -7,32 +7,18 @@ import { redirect } from 'next/navigation'
 
 import { VisibilitySchema } from '@endpointer/core'
 
-import { currentUser, isAuthReady } from '@/auth'
 import type { ManageState } from '@/components/collection-manage'
-import {
-  deleteCollection,
-  getCollectionBySlug,
-  renameCollection,
-  updateCollectionVisibility,
-} from '@/lib/collections'
+import { deleteCollection, renameCollection, updateCollectionVisibility } from '@/lib/collections'
 import { setCollectionListed } from '@/lib/gallery'
+import { managedCollection } from '@/lib/guard'
 
-/** 주인 확인. 로그인 설정 전(데모)에는 통과시킨다 */
+/** 주인 확인 — 공통 관문 (lib/guard · A49). 로그인 설정 전(데모)에는 통과시킨다 */
 async function ownedCollection(
   slug: string,
-): Promise<{ ok: true; id: string } | { ok: false; message: string }> {
-  const found = await getCollectionBySlug(slug)
-  if (!found.ok) return { ok: false, message: found.message }
-  if (found.data === null) {
-    return { ok: false, message: '이 컬렉션을 찾지 못했어요. 화면을 새로 고쳐 주세요.' }
-  }
-  if (isAuthReady) {
-    const user = await currentUser()
-    if (user === null || user.id !== found.data.owner_id) {
-      return { ok: false, message: '이 컬렉션의 주인만 바꿀 수 있어요.' }
-    }
-  }
-  return { ok: true, id: found.data.id }
+): Promise<{ ok: true; id: string; visibility: string } | { ok: false; message: string }> {
+  const managed = await managedCollection(slug)
+  if (!managed.ok) return managed
+  return { ok: true, id: managed.collection.id, visibility: managed.collection.visibility }
 }
 
 export async function renameCollectionAction(
@@ -70,7 +56,13 @@ export async function updateVisibilityAction(
   if (!result.ok) return { status: 'problem', message: result.message }
 
   revalidatePath(`/collections/${slug}`, 'layout')
-  return { status: 'done', message: '공개범위를 바꿨어요.' }
+  revalidatePath('/gallery')
+  return {
+    status: 'done',
+    message: result.data.unlisted
+      ? '공개범위를 바꿨어요. 공개가 아니게 되어 모두의 컬렉션에서도 내렸어요.'
+      : '공개범위를 바꿨어요.',
+  }
 }
 
 export async function updateListedAction(
@@ -81,18 +73,11 @@ export async function updateListedAction(
   // 체크박스는 켜졌을 때만 값을 보낸다 — 없으면 끈 것
   const listed = formData.get('listed') === 'on' || formData.get('listed') === 'true'
 
-  const found = await getCollectionBySlug(slug)
-  if (!found.ok) return { status: 'problem', message: found.message }
-  if (found.data === null) return { status: 'problem', message: '이 컬렉션을 찾지 못했어요.' }
-  if (isAuthReady) {
-    const user = await currentUser()
-    if (user === null || user.id !== found.data.owner_id) {
-      return { status: 'problem', message: '이 컬렉션의 주인만 바꿀 수 있어요.' }
-    }
-  }
+  const managed = await managedCollection(slug)
+  if (!managed.ok) return { status: 'problem', message: managed.message }
 
   const result = await setCollectionListed(
-    { id: found.data.id, visibility: found.data.visibility },
+    { id: managed.collection.id, visibility: managed.collection.visibility },
     listed,
   )
   if (!result.ok) return { status: 'problem', message: result.message }

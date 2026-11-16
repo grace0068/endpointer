@@ -73,7 +73,7 @@ export default async function CollectionSettingsPage({ params }: PageProps) {
         <section className="rounded-card border border-divider bg-surface p-5 shadow-[0_4px_20px_oklch(0.2_0.02_277/0.10)]">
           <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
             <h2 className="text-[15px] font-semibold text-ink">공개범위</h2>
-            <span className="text-[12.5px] text-faint">주소(API) 인증도 이걸 따라가요</span>
+            <span className="text-[12.5px] text-faint">REST API·AI 연결·모두의 컬렉션에 적용돼요</span>
           </div>
           <VisibilityForm
             current={collection.visibility}
@@ -84,7 +84,7 @@ export default async function CollectionSettingsPage({ params }: PageProps) {
           <div className="mt-4 border-t border-divider pt-4">
             <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-2">
               <h3 className="text-[14px] font-semibold text-ink">모두의 컬렉션</h3>
-              <span className="text-[12.5px] text-faint">다른 사람이 복제해 갈 수 있어요</span>
+              <span className="text-[12.5px] text-faint">전체공개일 때만 · 공개를 끄면 자동으로 내려가요</span>
             </div>
             <GalleryListingForm
               listed={collection.listed}

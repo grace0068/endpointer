@@ -28,6 +28,7 @@ export function DeveloperDetails({
   mcpUrl,
   fields,
   sampleJson,
+  requiresKey = false,
   collapsible = false,
 }: {
   apiUrl: string
@@ -35,6 +36,8 @@ export function DeveloperDetails({
   fields?: readonly FieldDef[]
   /** 실제 응답 샘플(JSON 문자열). 지어내지 않고 서버가 실제로 조회해 넘긴다 */
   sampleJson?: string | null
+  /** 비공개 — 예시가 Authorization 헤더를 싣는다 (A48) */
+  requiresKey?: boolean
   /** 접었다 펼 수 있게 할지. 기본은 상시 펼침 (머리말 참조) */
   collapsible?: boolean
 }) {
@@ -51,7 +54,7 @@ export function DeveloperDetails({
       </div>
 
         {/* 코드로 붙이기 — cURL·JS·Python·응답 JSON 을 골라 복사 */}
-        <ApiSnippets apiUrl={apiUrl} sampleJson={sampleJson ?? null} />
+        <ApiSnippets apiUrl={apiUrl} sampleJson={sampleJson ?? null} requiresKey={requiresKey} />
 
         {/* 응답 스키마 — 어떤 칸이 오고, 칸마다 어떤 조건을 걸 수 있나 (get_schema 와 같은 내용) */}
         {fields !== undefined && fields.length > 0 && (

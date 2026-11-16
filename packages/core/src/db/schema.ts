@@ -127,8 +127,15 @@ export const collections = pgTable(
     /** 필드 삭제/타입 변경 시 증가 */
     schema_version: integer('schema_version').notNull().default(1),
     visibility: text('visibility').$type<Visibility>().notNull().default('private'),
-    /** private 일 때 필수 */
+    /**
+     * private 일 때 필수. 원문 키의 SHA-256 hex — 원문은 저장하지 않는다 (ADR A48).
+     * 발급·교체는 이 값을 덮어쓰고(옛 키 즉시 무효), 폐기는 null 로 지운다.
+     */
     api_key_hash: text('api_key_hash'),
+    /** 사람이 키를 알아보는 앞 글자 (`ep_ab12`). 비밀이 아니다 — 원문 앞 7자뿐 (A48) */
+    api_key_hint: text('api_key_hint'),
+    /** 지금 키를 언제 만들었나. 키가 없으면 null */
+    api_key_created_at: ts('api_key_created_at'),
     /**
      * 모두의 컬렉션에서 복제됐다면 원본 컬렉션 (델타 §8). 원작자 크레딧·복제수 집계의 근거.
      * 원본이 지워져도 복제본은 독립이므로 CASCADE 가 아니라 SET NULL 이다 — 복제는 스냅샷이다.
@@ -327,7 +334,11 @@ export const views = pgTable(
       .$type<ViewSort[]>()
       .notNull()
       .default(sql`'[]'::jsonb`),
-    /** null = 컬렉션 기본 열 */
+    /** 조회 상태: 글자 칸 전체 검색어. null = 없음 (A47 — 예전 뷰는 null 이라 그대로 호환) */
+    search_q: text('search_q'),
+    /** 조회 상태: 출처 호스트. null = 모든 출처 (A47) */
+    source_host: text('source_host'),
+    /** 표시 설정: 보일 열과 순서(`_source` 포함). null = 컬렉션 기본 열. 조회 결과는 바꾸지 않는다 (A47) */
     columns_json: jsonb('columns_json').$type<string[]>(),
     /** null = 알림 꺼짐 (기본). channels 는 subscriptions.id 목록 (계약 §4-b) */
     notify_json: jsonb('notify_json').$type<ViewNotify>(),

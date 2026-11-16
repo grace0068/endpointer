@@ -49,9 +49,18 @@ export function ShareManage({
   return (
     <section className="rounded-card border border-border bg-surface p-7">
       <h2 className="mb-1 text-base font-bold text-ink">함께 보기</h2>
-      <p className="mb-4 text-[13px] leading-relaxed text-faint">
-        초대 링크를 받은 사람은 구글로 로그인한 뒤 이 컬렉션을 <b>읽기만</b> 할 수 있어요.
+      <p className="mb-2 text-[13px] leading-relaxed text-faint">
+        초대 링크를 받은 사람은 구글로 로그인한 뒤 이 작업 화면(표·연결)을 <b>읽기만</b> 할 수 있어요.
+        표에서 임시로 걸러 볼 수는 있지만 조건을 저장하거나 설정을 바꿀 수는 없어요.
       </p>
+      {/* 서로 다른 접근 경로라는 것을 미리 말한다 (ADR A49) — 하나를 끈다고 다른 것이 막히지 않는다 */}
+      <ul className="mb-4 flex list-disc flex-col gap-1 pl-5 text-[12.5px] leading-relaxed text-muted">
+        <li>링크를 끄거나 다시 만들어도 <b>이미 함께 보는 사람은 그대로</b>예요. 빼려면 아래에서 내보내 주세요.</li>
+        <li>
+          내보내면 이 화면에는 못 들어와요. 하지만 그 사람이 이미 아는 <b>API 키나 ‘주소를 아는 사람’ 주소</b>로는 계속
+          읽을 수 있어요 — 막으려면 연결 화면에서 키를 새로 만들거나 공개범위를 바꿔 주세요.
+        </li>
+      </ul>
 
       {freshUrl !== null ? (
         <div className="mb-3 flex items-center gap-2">

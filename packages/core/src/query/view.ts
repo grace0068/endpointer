@@ -90,7 +90,14 @@ function tighten(
  * 나머지 항목은 화면 표시용으로 예약돼 있다.
  */
 export function viewToQuery(
-  view: { where: readonly ViewCondition[]; sort?: readonly ViewSort[] },
+  view: {
+    where: readonly ViewCondition[]
+    sort?: readonly ViewSort[]
+    /** 검색어 (A47). null·빈 문자열이면 없음 */
+    q?: string | null
+    /** 출처 호스트 (A47). null·빈 문자열이면 모든 출처 */
+    source?: string | null
+  },
   now: Date,
 ): CollectionQuery {
   const eq: Record<string, string | number | boolean> = {}
@@ -151,6 +158,8 @@ export function viewToQuery(
   }
 
   const first = view.sort?.[0]
+  const q = typeof view.q === 'string' && view.q.trim() !== '' ? view.q.trim() : undefined
+  const source = typeof view.source === 'string' && view.source.trim() !== '' ? view.source.trim() : undefined
   return CollectionQuerySchema.parse({
     eq,
     gte,
@@ -160,6 +169,8 @@ export function viewToQuery(
     contains,
     not_contains: notContains,
     is_null: isNull,
+    ...(q !== undefined ? { q } : {}),
+    ...(source !== undefined ? { source } : {}),
     ...(first !== undefined ? { sort: first.dir === 'desc' ? `-${first.field}` : first.field } : {}),
   })
 }
@@ -174,11 +185,23 @@ export function synthesizeViewZero(): {
   name: string
   where: ViewCondition[]
   sort: ViewSort[]
+  q: null
+  source: null
   columns: null
   notify: null
   pinned: true
 } {
-  return { slug: 'all', name: '전체', where: [], sort: [], columns: null, notify: null, pinned: true }
+  return {
+    slug: 'all',
+    name: '전체',
+    where: [],
+    sort: [],
+    q: null,
+    source: null,
+    columns: null,
+    notify: null,
+    pinned: true,
+  }
 }
 
 /** 다음 KST 자정 직후 평가 시각까지 남은 ms — 일일 뷰 평가 잡(A34)의 스케줄 재료 */

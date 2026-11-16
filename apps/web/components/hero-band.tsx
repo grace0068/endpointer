@@ -1,3 +1,4 @@
+import Image from 'next/image'
 import type { ReactNode } from 'react'
 
 import { cn } from '@/lib/utils'
@@ -43,8 +44,12 @@ export function HeroBand({
           overlap ? (dense ? 'pb-[72px]' : 'pb-[84px]') : dense ? 'pb-7' : 'pb-9',
         )}
       >
-        <img
+        {/* 장식 — 정적 SVG 라 최적화가 필요 없다(unoptimized). 크기는 viewBox 320×340 비율 */}
+        <Image
           src="/diamond-motif.svg"
+          width={264}
+          height={280}
+          unoptimized
           alt=""
           aria-hidden
           className="pointer-events-none absolute -top-10 right-8 hidden h-[280px] opacity-25 sm:block"

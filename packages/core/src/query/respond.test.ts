@@ -172,34 +172,38 @@ describe('다음 커서', () => {
     last_seen_at: NOW,
   }
 
+  const page = { fingerprint: 'fp-test', nextOffset: 50 }
+
   it('다음 페이지가 없으면 null', () => {
     const sort = resolveSort(undefined, FIELDS)
-    expect(nextCursorFrom(sortRow, sort, false)).toBeNull()
-    expect(nextCursorFrom(undefined, sort, true)).toBeNull()
+    expect(nextCursorFrom(sortRow, sort, false, page)).toBeNull()
+    expect(nextCursorFrom(undefined, sort, true, page)).toBeNull()
   })
 
-  it('기본 정렬은 first_seen_at 내림차순이고 커서에 그 값이 실린다', () => {
+  it('기본 정렬은 first_seen_at 내림차순이고 커서에 그 값·지문·다음 위치가 실린다', () => {
     const sort = resolveSort(undefined, FIELDS)
     expect(sort).toMatchObject({ key: 'first_seen_at', direction: 'desc', nullable: false })
-    const cursor = nextCursorFrom(sortRow, sort, true)
+    const cursor = nextCursorFrom(sortRow, sort, true, page)
     expect(decodeCursor(cursor)).toEqual({
-      v: 1,
+      v: 2,
       s: '2026-07-20T00:00:00.000Z',
       id: sortRow.id,
+      f: 'fp-test',
+      o: 50,
     })
   })
 
   it('필드 정렬이면 그 필드 값이 실린다', () => {
     const sort = resolveSort('deadline', FIELDS)
     expect(sort).toMatchObject({ key: 'deadline', direction: 'asc', nullable: true })
-    expect(decodeCursor(nextCursorFrom(sortRow, sort, true))?.s).toBe('2026-08-21')
+    expect(decodeCursor(nextCursorFrom(sortRow, sort, true, page))?.s).toBe('2026-08-21')
   })
 
   it('정렬 기준 값이 비어 있으면 null 이 실린다', () => {
     const sort = resolveSort('-amount', FIELDS)
     const empty = { ...sortRow, data_json: {} }
     expect(sortValueOf(empty, sort)).toBeNull()
-    expect(decodeCursor(nextCursorFrom(empty, sort, true))?.s).toBeNull()
+    expect(decodeCursor(nextCursorFrom(empty, sort, true, page))?.s).toBeNull()
   })
 
   it('모르는 정렬 기준은 기본값으로 떨어진다', () => {

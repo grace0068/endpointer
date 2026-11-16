@@ -92,7 +92,9 @@ pnpm db:reset                # 볼륨까지 날리고 migrate + seed
 pnpm dev                     # 세 앱 병렬 (web 3000 · worker · mcp 3002)
 pnpm dev:web                 # 하나만 띄우기
 pnpm typecheck               # 전 패키지. 커밋 전 필수
-pnpm test                    # 전 패키지 vitest
+pnpm test                    # 전 패키지 vitest (DB 테스트는 endpointer_test 에서만 — 못 닿으면 건너뜀)
+pnpm --filter @endpointer/web test:e2e   # 빌드 후 실제 브라우저로 표·뷰 흐름 (ADR A51)
+pnpm --filter @endpointer/web lint       # ESLint 9 flat config
 ```
 
 한 패키지만: `pnpm --filter @endpointer/core test`

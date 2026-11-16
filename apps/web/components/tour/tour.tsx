@@ -63,43 +63,48 @@ export function Tour({ chapter: chapterId }: { chapter: TourChapter['id'] }) {
 
   /** i번째 스텝의 앵커를 찾아 스포트라이트. 못 찾으면 다음 스텝으로 조용히 넘어간다 */
   const goToStep = useCallback(
-    (i: number) => {
-      if (findTimer.current) clearInterval(findTimer.current)
-      if (i < 0) return
-      if (i >= chapter.steps.length) {
-        if (chapter.final) {
-          targetRef.current = null
-          setRect(null)
-          setPhase('final')
-        } else {
-          finish('done')
+    (start: number) => {
+      // 못 찾으면 다음 스텝으로 — 자기 자신을 다시 부르므로 안쪽 함수로 둔다
+      // (useCallback 이 만든 goToStep 을 그 정의 안에서 부르면 선언 전 접근이 된다)
+      const go = (i: number): void => {
+        if (findTimer.current) clearInterval(findTimer.current)
+        if (i < 0) return
+        if (i >= chapter.steps.length) {
+          if (chapter.final) {
+            targetRef.current = null
+            setRect(null)
+            setPhase('final')
+          } else {
+            finish('done')
+          }
+          return
         }
-        return
-      }
 
-      const step = chapter.steps[i]
-      if (step === undefined) return finish('done')
+        const step = chapter.steps[i]
+        if (step === undefined) return finish('done')
 
-      let tries = 0
-      const tryFind = (): boolean => {
-        const el = document.querySelector(`[data-tour="${step.anchor}"]`)
-        if (el === null) return false
-        targetRef.current = el
-        el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-        setRect(el.getBoundingClientRect())
-        setIndex(i)
-        setPhase('step')
-        return true
-      }
-
-      if (tryFind()) return
-      findTimer.current = setInterval(() => {
-        tries += 1
-        if (tryFind() || tries >= FIND_TRIES) {
-          if (findTimer.current) clearInterval(findTimer.current)
-          if (tries >= FIND_TRIES) goToStep(i + 1)
+        let tries = 0
+        const tryFind = (): boolean => {
+          const el = document.querySelector(`[data-tour="${step.anchor}"]`)
+          if (el === null) return false
+          targetRef.current = el
+          el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+          setRect(el.getBoundingClientRect())
+          setIndex(i)
+          setPhase('step')
+          return true
         }
-      }, FIND_INTERVAL_MS)
+
+        if (tryFind()) return
+        findTimer.current = setInterval(() => {
+          tries += 1
+          if (tryFind() || tries >= FIND_TRIES) {
+            if (findTimer.current) clearInterval(findTimer.current)
+            if (tries >= FIND_TRIES) go(i + 1)
+          }
+        }, FIND_INTERVAL_MS)
+      }
+      go(start)
     },
     [chapter, finish],
   )
@@ -115,8 +120,13 @@ export function Tour({ chapter: chapterId }: { chapter: TourChapter['id'] }) {
     if (seen !== null) return
     if (!window.matchMedia('(min-width: 768px)').matches) return
 
-    if (chapter.welcome) setPhase('welcome')
-    else goToStep(0)
+    // 다음 프레임에 시작한다 — 화면이 한 번 그려진 뒤라야 앵커 위치를 잴 수 있고,
+    // effect 본문에서 바로 상태를 바꾸지 않는다 (렌더가 한 번 더 돈다)
+    const frame = requestAnimationFrame(() => {
+      if (chapter.welcome) setPhase('welcome')
+      else goToStep(0)
+    })
+    return () => cancelAnimationFrame(frame)
     // 마운트 시 1회 판정이면 충분하다
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

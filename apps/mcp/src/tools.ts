@@ -1,4 +1,4 @@
-// 컬렉션 스키마 → MCP 도구 4개 (기획서 12장)
+// 컬렉션 스키마 → MCP 도구 (기획서 12장 · ADR A46)
 //
 // ── 이 파일이 얇아야 하는 이유 ───────────────────────────────────────────
 // 기획서 3장: MCP 는 가장 차별적이지만 구현 난도는 낮다. 스키마와 엔드포인트가 이미
@@ -6,8 +6,10 @@
 // 그래서 이 파일이 하는 일은 세 가지뿐이다:
 //   1. FieldDef[] → zod 입력 스키마 (도구는 **자동 생성**된다. 하드코딩 금지)
 //   2. 도구 인자 → REST 쿼리 파라미터 이름 그대로 (12장 표와 1:1)
-//   3. core 의 parseCollectionQuery → buildCollectionResponse 호출
-// 조건 해석도 응답 조립도 여기서 다시 짜지 않는다. core 가 단일 출처다.
+//   3. core 의 runCollectionRequest 호출 — **REST 라우트와 같은 함수**
+// 조건 해석·검증·오류 판단도 응답 조립도 여기서 다시 짜지 않는다 (A46: 같은 입력이면 같은 판단).
+// 그래서 입력 스키마는 **타입만** 거른다 — 개수 상한·정수 여부 같은 값 검사는 core 가 해서
+// REST 와 같은 코드(limit_exceeded …)·같은 문장으로 실패한다.
 //
 // ── 문구 규약 ────────────────────────────────────────────────────────────
 // 도구 설명과 응답 텍스트는 **사용자의 AI 가 읽는다.** 한국어로 쓰되 사람에게 그대로
@@ -22,6 +24,7 @@ import type { Db } from '@endpointer/core/db'
 import {
   DEFAULT_PAGE_LIMIT,
   MAX_PAGE_LIMIT,
+  summarizeViewState,
   type ApiItem,
   type CollectionResponse,
   type FieldDef,
@@ -31,24 +34,24 @@ import {
   type SourceSummary,
   type SourcesStatusResponse,
 } from '@endpointer/core'
-
-import { summarizeViewConditions } from '@endpointer/core'
-
-import type { AccessibleCollection } from './auth'
 import {
   BUILTIN_SORT_KEYS,
   RANGE_FIELD_TYPES,
   RANGE_SUFFIXES,
   RESERVED_PARAMS,
-  buildCollectionResponse,
-  parseCollectionQuery,
-  viewToQuery,
-} from './core-query'
-import type { McpView } from './views'
+  runCollectionRequest,
+  type CollectionRequestInput,
+  type CollectionRequestOutcome,
+  type StoredView,
+} from '@endpointer/core/query'
+
+import type { AccessibleCollection } from './auth'
 
 export interface ToolContext {
   db: Db
   collection: AccessibleCollection
+  /** 상대 날짜를 풀 기준 시각 — 테스트가 고정한다. 없으면 지금 */
+  now?: () => Date
 }
 
 // ── 사람 말로 옮기는 표 ──────────────────────────────────────────────────
@@ -80,26 +83,29 @@ function enumValuesOf(field: FieldDef): string[] {
   return [...new Set(Object.values(field.mapping))].filter((v) => v !== '')
 }
 
-/** 필드 하나의 "완전일치" 파라미터. 타입이 그대로 zod 로 내려간다 */
-function equalitySchema(field: FieldDef): z.ZodTypeAny {
-  switch (field.type) {
-    case 'money':
-    case 'number':
-      return z.number()
-    case 'enum': {
-      const values = enumValuesOf(field)
-      // 선택지를 알면 그대로 열거한다 — 클라이언트 LLM 이 오타로 헛돌지 않는다
-      if (values.length > 0) return z.enum(values as [string, ...string[]])
-      return z.string()
-    }
-    default:
-      return z.string()
-  }
+/**
+ * 값 하나 — 글자·숫자·참거짓을 다 받는다. 타입이 틀린 값도 **core 가** 거절해야
+ * REST 와 같은 코드·같은 문장이 나온다 (A46). 어떤 값을 넣어야 하는지는 설명 문구가 말한다.
+ */
+const scalar = () => z.union([z.string(), z.number(), z.boolean()])
+
+/** 필드 하나의 "완전일치" 파라미터 */
+function equalitySchema(_field: FieldDef): z.ZodTypeAny {
+  return scalar()
 }
 
 /** 범위 파라미터(`_gte` · `_lte`). 기획서 12장 "date/number/money 타입에만" */
-function rangeSchema(field: FieldDef): z.ZodTypeAny {
-  return field.type === 'date' ? z.string() : z.number()
+function rangeSchema(_field: FieldDef): z.ZodTypeAny {
+  return scalar()
+}
+
+/**
+ * 도구 입력 스키마. **모르는 인자도 통과시킨다**(looseObject) — SDK 기본(strip)은 모르는 인자를
+ * 조용히 버려서, REST 에서는 거절되는 오타가 MCP 에서는 무시되고 더 넓은 결과가 나왔다.
+ * 통과시킨 인자는 core 가 "이 컬렉션에 없는 조건" 으로 거절한다 (A46).
+ */
+function toolInput(shape: Shape) {
+  return z.looseObject(shape)
 }
 
 function describeField(field: FieldDef): string {
@@ -110,12 +116,25 @@ function describeField(field: FieldDef): string {
   return bits.join(' · ')
 }
 
+/** 페이지 인자 — 뷰 도구와 list_items 가 같이 쓴다 */
+function pageShape(): Shape {
+  return {
+    limit: scalar()
+      .optional()
+      .describe(`한 번에 가져올 개수 (기본 ${DEFAULT_PAGE_LIMIT}, 최대 ${MAX_PAGE_LIMIT}). 넘으면 거절된다`),
+    cursor: z
+      .string()
+      .optional()
+      .describe('앞선 응답의 next_cursor 를 그대로 넣으면 그 다음부터 이어서 가져온다. 다른 인자는 앞선 요청과 같아야 한다'),
+  }
+}
+
 /**
  * `list_items` 의 입력 스키마를 컬렉션 스키마에서 만든다.
  *
  * 이름 규약은 REST 와 **글자 그대로 같다** (기획서 12장 표):
  *   `{필드키}` · `{필드키}_gte` · `{필드키}_lte` · q · source · since · sort · limit · cursor · include
- * 같은 이름이라서 아래 handler 가 인자를 그대로 core 의 parseCollectionQuery 에 넘길 수 있고,
+ * 같은 이름이라서 아래 handler 가 인자를 그대로 core 에 넘길 수 있고,
  * 그 덕에 MCP 와 REST 의 동작이 구조적으로 갈라지지 않는다.
  */
 export function buildListItemsShape(fields: readonly FieldDef[]): Shape {
@@ -124,8 +143,7 @@ export function buildListItemsShape(fields: readonly FieldDef[]): Shape {
   const reserved = new Set<string>(RESERVED_PARAMS)
 
   for (const field of fields) {
-    // 필드 키가 제어용 이름과 겹치면 제어용이 이긴다. 겹치는 순간 조건을 못 걸지만
-    // 조용히 다른 뜻으로 동작하는 것보다는 낫다 (core 의 params.ts 도 같은 순서다).
+    // 필드 키가 제어용 이름과 겹치면 제어용이 이긴다 (core 의 params.ts 도 같은 순서다)
     if (reserved.has(field.key)) continue
     shape[field.key] = equalitySchema(field).optional().describe(describeField(field))
   }
@@ -134,7 +152,6 @@ export function buildListItemsShape(fields: readonly FieldDef[]): Shape {
     if (!RANGE_FIELD_TYPES.includes(field.type)) continue
     for (const suffix of RANGE_SUFFIXES) {
       const name = `${field.key}${suffix}`
-      // 하필 그 이름의 필드가 따로 있으면 완전일치 쪽이 이긴다 (params.ts 와 같은 우선순위)
       if (fieldKeys.has(name) || reserved.has(name)) continue
       const bound = suffix === '_gte' ? '이상' : '이하'
       shape[name] = rangeSchema(field)
@@ -155,16 +172,9 @@ export function buildListItemsShape(fields: readonly FieldDef[]): Shape {
     .string()
     .optional()
     .describe(`정렬 기준. 앞에 -를 붙이면 큰 값부터. 쓸 수 있는 값: ${sortable.join(', ')}`)
-  shape['limit'] = z
-    .number()
-    .int()
-    .min(1)
-    .max(MAX_PAGE_LIMIT)
-    .optional()
-    .describe(`한 번에 가져올 개수 (기본 ${DEFAULT_PAGE_LIMIT}, 최대 ${MAX_PAGE_LIMIT})`)
-  shape['cursor'] = z.string().optional().describe('앞선 응답의 next_cursor 를 넣으면 그 다음부터 이어서 가져온다')
+  Object.assign(shape, pageShape())
   shape['include'] = z
-    .enum(['provenance'])
+    .string()
     .optional()
     .describe('provenance 를 넣으면 각 값이 원문 어디에서 왔는지도 함께 준다')
 
@@ -191,8 +201,10 @@ export function argsToQueryParams(args: Record<string, unknown>): Record<string,
     if (Array.isArray(value)) {
       const joined = value.filter((v) => typeof v === 'string' || typeof v === 'number').join(',')
       if (joined !== '') out[name] = joined
+      continue
     }
-    // 그 밖의 모양은 조건으로 쓸 수 없다. parseCollectionQuery 가 경고를 낼 기회조차 없으므로 버린다.
+    // 객체처럼 조건으로 쓸 수 없는 모양도 버리지 않는다 — 글자로 넘겨 core 가 거절하게 한다 (A46)
+    out[name] = JSON.stringify(value)
   }
   return out
 }
@@ -238,29 +250,26 @@ export function renderSources(sources: Record<string, SourceSummary>): string {
     .join('\n')
 }
 
-export function renderCollectionResponse(
-  response: CollectionResponse,
-  collection: AccessibleCollection,
-  warnings: readonly string[],
-): string {
+export function renderCollectionResponse(response: CollectionResponse, collection: AccessibleCollection): string {
   const fields = collection.schema_json
   const blocks: string[] = []
+  const { total, offset } = response.page
+  const count = response.items.length
 
   blocks.push(
-    response.items.length === 0
+    count === 0
       ? `${collection.name} — 조건에 맞는 항목이 없습니다.`
-      : `${collection.name} — ${response.items.length}개`,
+      : `${collection.name} — 전체 ${total}개 중 ${offset + 1}–${offset + count}번째`,
   )
 
-  if (warnings.length > 0) blocks.push(warnings.map((w) => `※ ${w}`).join('\n'))
-  if (response.items.length > 0) {
-    blocks.push(response.items.map((item, i) => renderItem(item, fields, i)).join('\n'))
+  if (count > 0) {
+    blocks.push(response.items.map((item, i) => renderItem(item, fields, offset + i)).join('\n'))
   }
 
   blocks.push(`[사이트 상태]\n${renderSources(response.sources)}`)
 
   if (response.page.next_cursor) {
-    blocks.push(`더 있습니다. 이어서 보려면 cursor="${response.page.next_cursor}" 로 다시 부르세요.`)
+    blocks.push(`더 있습니다. 이어서 보려면 같은 인자에 cursor="${response.page.next_cursor}" 를 더해 다시 부르세요.`)
   }
 
   return blocks.join('\n\n')
@@ -269,7 +278,6 @@ export function renderCollectionResponse(
 /**
  * structuredContent 는 **REST 응답과 완전히 같은 객체**로 둔다 (G0 계약 (2)).
  * 두 표면이 같은 모양을 내야 "표면이 넷이지만 데이터는 하나" 가 참이 된다.
- * 그래서 경고는 여기 섞지 않고 사람이 읽는 텍스트 쪽에만 넣는다.
  */
 function structured(value: object): Record<string, unknown> {
   return value as Record<string, unknown>
@@ -279,9 +287,33 @@ function textResult(text: string, data: object): CallToolResult {
   return { content: [{ type: 'text', text }], structuredContent: structured(data) }
 }
 
-/** 도구 안에서 뭔가 잘못돼도 스택 트레이스를 내보내지 않는다 (보장선 B4) */
-function stateResult(message: string): CallToolResult {
-  return { content: [{ type: 'text', text: message }], isError: true }
+/**
+ * 실패 — REST 의 오류 본문과 같은 `{error:{code,message,problems}}` 를 싣는다 (A46).
+ * 같은 입력이면 REST 가 낸 code 와 여기의 code 가 같다. 스택 트레이스는 내보내지 않는다 (B4).
+ */
+export function errorResult(code: string, message: string, problems: readonly unknown[] = []): CallToolResult {
+  const lines = [message]
+  if (problems.length > 1) {
+    for (const p of problems) {
+      const m = (p as { message?: unknown }).message
+      if (typeof m === 'string') lines.push(`- ${m}`)
+    }
+  }
+  return {
+    content: [{ type: 'text', text: lines.join('\n') }],
+    structuredContent: { error: { code, message, ...(problems.length > 0 ? { problems } : {}) } },
+    isError: true,
+  }
+}
+
+function outcomeResult(outcome: CollectionRequestOutcome, collection: AccessibleCollection): CallToolResult {
+  if (!outcome.ok) return errorResult(outcome.code, outcome.message, outcome.problems)
+  return textResult(renderCollectionResponse(outcome.response, collection), outcome.response)
+}
+
+async function run(ctx: ToolContext, input: CollectionRequestInput): Promise<CallToolResult> {
+  const outcome = await runCollectionRequest(ctx.db, ctx.collection, { ...input, now: ctx.now?.() ?? new Date() })
+  return outcomeResult(outcome, ctx.collection)
 }
 
 // ── 도구 등록 ────────────────────────────────────────────────────────────
@@ -294,7 +326,7 @@ function collectionOverview(collection: AccessibleCollection): string {
 }
 
 export function registerCollectionTools(server: McpServer, ctx: ToolContext): void {
-  const { db, collection } = ctx
+  const { collection } = ctx
   const fields = collection.schema_json
 
   // ── list_items ─────────────────────────────────────────────────────────
@@ -306,17 +338,13 @@ export function registerCollectionTools(server: McpServer, ctx: ToolContext): vo
         `"${collection.name}" 컬렉션의 항목을 조건으로 걸러서 가져온다.`,
         `항목 구성: ${collectionOverview(collection)}`,
         '조건은 전부 선택이고, 아무것도 안 주면 최근에 올라온 순서로 보여준다.',
-        '이해하지 못한 조건은 버리고 나머지로 답한 뒤 무엇을 버렸는지 함께 알려준다.',
+        '이해하지 못한 조건이 있으면 결과를 내지 않고 무엇이 틀렸는지 알려준다 — 그 조건을 고쳐 다시 부른다.',
         '응답에는 항목과 함께 사이트별 상태가 언제나 들어 있다 — 일부 사이트가 잠시 막혀 있어도 나머지는 그대로 나온다.',
       ].join('\n'),
-      inputSchema: buildListItemsShape(fields),
+      inputSchema: toolInput(buildListItemsShape(fields)),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async (args) => {
-      const { query, warnings } = parseCollectionQuery(argsToQueryParams(args), fields)
-      const response = await buildCollectionResponse(db, collection, query)
-      return textResult(renderCollectionResponse(response, collection, warnings), response)
-    },
+    async (args) => run(ctx, { params: argsToQueryParams(args as Record<string, unknown>) }),
   )
 
   // ── search_items ───────────────────────────────────────────────────────
@@ -329,32 +357,18 @@ export function registerCollectionTools(server: McpServer, ctx: ToolContext): vo
         '문장 전체보다 핵심 낱말 하나가 가장 잘 맞는다. 예) "이번 주 마감인 창업 지원사업" → "창업"',
         '기간이나 금액 조건까지 걸어야 하면 list_items 를 쓴다.',
       ].join('\n'),
-      inputSchema: {
+      inputSchema: toolInput({
         query: z.string().min(1).describe('찾을 말. 핵심 낱말 하나를 권한다'),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(MAX_PAGE_LIMIT)
-          .optional()
-          .describe(`한 번에 가져올 개수 (기본 ${DEFAULT_PAGE_LIMIT})`),
-      },
+        ...pageShape(),
+      }),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
+    // 검색은 list_items 의 `?q=` 와 같은 길로 간다. 별도 검색 경로를 만들지 않는다
     async (args) => {
-      if (!fields.some((f) => f.type === 'text')) {
-        return stateResult('이 컬렉션에는 글자로 된 항목이 없어서 검색할 대상이 없습니다.')
-      }
-
-      // 검색은 list_items 의 `?q=` 와 같은 길로 간다. 별도 검색 경로를 만들지 않는다.
-      // TODO(G3): 지금은 낱말 하나를 그대로 포함 검색한다. 여러 낱말 AND · 동의어는
-      //   core 쪽 searchCondition 을 넓히는 방식으로 붙인다 (여기서 따로 짜지 않는다).
-      const params: Record<string, string> = { q: args.query }
-      if (args.limit !== undefined) params['limit'] = String(args.limit)
-
-      const { query, warnings } = parseCollectionQuery(params, fields)
-      const response = await buildCollectionResponse(db, collection, query)
-      return textResult(renderCollectionResponse(response, collection, warnings), response)
+      const { query, ...page } = args as { query: string } & Record<string, unknown>
+      // q 를 따로 주면 query 와 겹친다 — 하나만 쓰게 한다 (조용히 하나를 고르지 않는다)
+      if ('q' in page) return errorResult('invalid_query', '검색어는 query 하나로만 주세요 (q 와 함께 줄 수 없습니다)')
+      return run(ctx, { params: { ...argsToQueryParams(page), q: query } })
     },
   )
 
@@ -395,30 +409,29 @@ export function registerCollectionTools(server: McpServer, ctx: ToolContext): vo
       annotations: { readOnlyHint: true },
     },
     async () => {
-      // 상태만 필요하지만 응답 조립은 core 것을 그대로 쓴다. 여기서 다시 짜면 두 표면이 갈라진다.
-      // 아이템은 안 쓰므로 가장 작은 페이지로 부른다.
-      const { query } = parseCollectionQuery({ limit: '1' }, fields)
-      const response = await buildCollectionResponse(db, collection, query)
-      const payload: SourcesStatusResponse = { sources: response.sources }
-      return textResult(`${collection.name} 의 사이트 상태\n${renderSources(response.sources)}`, payload)
+      // 상태만 필요하지만 응답 조립은 core 것을 그대로 쓴다. 가장 작은 페이지로 부른다
+      const outcome = await runCollectionRequest(ctx.db, collection, { params: { limit: '1' } })
+      if (!outcome.ok) return errorResult(outcome.code, outcome.message, outcome.problems)
+      const payload: SourcesStatusResponse = { sources: outcome.response.sources }
+      return textResult(`${collection.name} 의 사이트 상태\n${renderSources(outcome.response.sources)}`, payload)
     },
   )
 }
 
-// ── 뷰별 도구 (뷰 계약 §4 · 델타 2-4) ────────────────────────────────────
+// ── 뷰별 도구 (뷰 계약 §4 · 델타 2-4 · A46) ──────────────────────────────
 // `search_items(view=…)` 가 아니라 **뷰마다 도구 하나** — 도구 설명에 뷰 이름·조건이
 // 그대로 들어가야 클라이언트 LLM 이 "이번 달 마감 뭐 있어?" 를 바로 맞는 도구로 잇는다.
+// 실행은 REST `?view=` 와 같은 함수다 — 깨진 뷰·커서 판단이 갈라지지 않는다.
 
 /** 고정 도구 4개와 이름이 겹치면 뷰 쪽을 양보시킨다 (slug 규칙상 언더스코어가 없어 실제로는 안 겹친다) */
 const FIXED_TOOL_NAMES = new Set(['list_items', 'search_items', 'get_schema', 'get_sources_status'])
 
-export function registerViewTools(server: McpServer, ctx: ToolContext, views: readonly McpView[]): void {
-  const { db, collection } = ctx
-  const fields = collection.schema_json
+export function registerViewTools(server: McpServer, ctx: ToolContext, views: readonly StoredView[]): void {
+  const fields = ctx.collection.schema_json
 
   for (const view of views) {
     const toolName = FIXED_TOOL_NAMES.has(view.slug) ? `view-${view.slug}` : view.slug
-    const summary = summarizeViewConditions(view.where, fields)
+    const summary = summarizeViewState(view.state, fields)
 
     server.registerTool(
       toolName,
@@ -428,32 +441,12 @@ export function registerViewTools(server: McpServer, ctx: ToolContext, views: re
           `사용자가 저장해 둔 조건 "${view.name}" 에 지금 맞는 항목을 가져온다.`,
           summary === '' ? '조건 없이 전체를 본다.' : `조건: ${summary}`,
           '이 조건에 대한 질문이면 list_items 로 조건을 다시 만들지 말고 이 도구를 그대로 부른다.',
+          '결과가 더 있으면 응답의 next_cursor 를 cursor 로 넣어 이어서 가져온다.',
         ].join('\n'),
-        inputSchema: {
-          limit: z
-            .number()
-            .int()
-            .min(1)
-            .max(MAX_PAGE_LIMIT)
-            .optional()
-            .describe(`한 번에 가져올 개수 (기본 ${DEFAULT_PAGE_LIMIT})`),
-        },
+        inputSchema: toolInput(pageShape()),
         annotations: { readOnlyHint: true, openWorldHint: true },
       },
-      async (args) => {
-        if (view.broken) {
-          return stateResult(
-            `"${view.name}" 조건에 쓰인 칸이 표에서 사라져 지금은 답할 수 없습니다. 표 주인이 작업실에서 고쳐야 합니다.`,
-          )
-        }
-        // 화면·REST·알림과 같은 문 — viewToQuery 하나 (A33)
-        const query = viewToQuery({ where: view.where, sort: view.sort }, new Date())
-        const response = await buildCollectionResponse(db, collection, {
-          ...query,
-          ...(args.limit !== undefined ? { limit: args.limit } : {}),
-        })
-        return textResult(renderCollectionResponse(response, collection, []), response)
-      },
+      async (args) => run(ctx, { params: argsToQueryParams(args as Record<string, unknown>), viewSlug: view.slug }),
     )
   }
 }

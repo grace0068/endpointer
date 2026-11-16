@@ -1,3 +1,4 @@
+import Image from 'next/image'
 import { redirect } from 'next/navigation'
 
 import { currentUser, isAuthReady } from '@/auth'
@@ -86,8 +87,12 @@ export default async function HomePage() {
 
       {/* 히어로 (원본 Hero) — 그라디언트 워드 + 연결 다이어그램 */}
       <section className="relative overflow-hidden px-6 pt-16 pb-16 md:pt-[88px] md:pb-[72px]">
-        <img
+        {/* 장식 — 정적 SVG 라 최적화가 필요 없다(unoptimized). 크기는 viewBox 320×340 비율 */}
+        <Image
           src="/diamond-motif.svg"
+          width={282}
+          height={300}
+          unoptimized
           alt=""
           aria-hidden
           className="pointer-events-none absolute -top-16 -right-16 h-[300px] opacity-15"

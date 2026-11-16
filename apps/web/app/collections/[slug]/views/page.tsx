@@ -15,7 +15,8 @@ import {
   type SubscriptionRecord,
 } from '@/lib/subscriptions'
 import { ViewName } from '@/components/view-rename'
-import { fetchViewPage, healthCopy, listViews, summarizeConditions } from '@/lib/views'
+import { loadTablePage } from '@/lib/table-data'
+import { healthCopy, listViews, summarizeView } from '@/lib/views'
 
 import {
   stopSubscriptionAction,
@@ -72,13 +73,12 @@ export default async function CollectionViewsPage({ params }: PageProps) {
   const views = viewsResult.ok ? viewsResult.data : []
   const channels = subscriptions.ok ? subscriptions.data : []
 
-  // 뷰별 현재 건수 — 표와 같은 문(viewToQuery)으로 센다. 50개 넘으면 "50+"
+  // 뷰별 현재 건수 — 표·REST·MCP 와 같은 함수로 센 **정확한 전체 개수** (A46: page.total)
   const cards = await Promise.all(
     views.map(async (view) => {
-      const page = view.health === 'broken' ? null : await fetchViewPage(collection, view, 50)
-      const count = page !== null && page.ok ? page.data.items.length : null
-      const more = page !== null && page.ok && page.data.page.next_cursor !== null
-      return { view, countLabel: count === null ? '—' : `${count}${more ? '+' : ''}건` }
+      const page = view.health === 'broken' ? null : await loadTablePage(collection, { viewSlug: view.slug, cursor: null, includeProvenance: false })
+      const count = page !== null && page.ok ? page.response.page.total : null
+      return { view, countLabel: count === null ? '—' : `${count.toLocaleString('ko-KR')}건` }
     }),
   )
 
@@ -104,7 +104,7 @@ export default async function CollectionViewsPage({ params }: PageProps) {
             <div className="grid items-start gap-4 lg:grid-cols-2">
               {cards.map(({ view, countLabel }) => {
                 const health = healthCopy(view.health)
-                const summary = summarizeConditions(view.where, collection.schema_json)
+                const summary = summarizeView(view, collection.schema_json)
                 const notifyOn = view.notify !== null
                 return (
                   <article
@@ -132,10 +132,27 @@ export default async function CollectionViewsPage({ params }: PageProps) {
                       </Badge>
                     </div>
 
-                    {/* 조건 요약 — 원본은 술어 문자열을 가라앉은 mono 박스에 담는다 */}
+                    {/* 조건 요약 — 칸 조건·검색어·출처·정렬까지 (A47). 원본은 가라앉은 mono 박스 */}
                     <p className="rounded-md bg-canvas px-2.5 py-1.5 font-mono text-[11.5px] text-muted">
                       {summary === '' ? '조건 없음 (전체)' : summary}
                     </p>
+
+                    {/* 쓸 수 없게 된 뷰 — 원인과 고치는 길 (A47) */}
+                    {view.health === 'broken' && (
+                      <div className="rounded-md border border-attention/30 px-2.5 py-2 text-[12.5px] text-muted">
+                        <ul className="list-disc pl-4">
+                          {view.problems.map((p) => (
+                            <li key={p}>{p}</li>
+                          ))}
+                        </ul>
+                        <Link href={`${tablePath}?view=${view.slug}`} className="mt-1 inline-block font-semibold text-accent">
+                          표에서 고치기 →
+                        </Link>
+                      </div>
+                    )}
+                    {view.health !== 'broken' && view.droppedColumns.length > 0 && (
+                      <p className="text-[12px] text-faint">저장된 열 중 표에서 사라진 것은 빼고 보여드려요.</p>
+                    )}
 
                     <div className="flex flex-wrap items-center gap-2 border-t border-divider pt-2.5">
                       {/* 알림은 켬/끔뿐 — 어디로 갈지는 오른쪽 '알림 받을 곳'의 체크가 정한다 */}

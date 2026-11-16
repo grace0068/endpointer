@@ -61,9 +61,11 @@ export async function cloneCollection(input: CloneInput): Promise<CloneOutcome> 
   if (original === undefined) {
     return { ok: false, message: '그런 컬렉션이 없어요.', stage: 'not_found' }
   }
-  // private 은 링크로도 못 여는 컬렉션이다 — 복제도 막는다. 화면이 이미 걸러도 여기서 한 번 더.
-  if (original.visibility === 'private') {
-    return { ok: false, message: '이 컬렉션은 복제할 수 없어요.', stage: 'forbidden' }
+  // 복제는 **공개(public)만** (ADR A49). 복제본은 출처 주소·추출 규칙까지 가져가는데, unlisted 는
+  // 주소를 아는 사람에게 항목만 보여주기로 한 것이지 그 구성까지 내주기로 한 것이 아니다.
+  // 화면(모두의 컬렉션)이 이미 공개만 보여줘도 여기서 한 번 더 막는다 — 서버 액션은 누구나 부를 수 있다.
+  if (original.visibility !== 'public') {
+    return { ok: false, message: '공개된 컬렉션만 복제할 수 있어요.', stage: 'forbidden' }
   }
 
   const originalSources = await db.query.sources.findMany({

@@ -144,7 +144,10 @@ export function toApiItem(
   return out as unknown as ApiItem
 }
 
-/** 다음 페이지가 있으면 마지막 행으로 커서를 만든다. 없으면 null */
+/**
+ * 다음 페이지가 있으면 마지막 행으로 커서를 만든다. 없으면 null.
+ * 지문(`fingerprint`)과 다음 페이지의 시작 위치(`nextOffset`)를 같이 싣는다 (A46).
+ */
 export function nextCursorFrom(
   lastRow:
     | {
@@ -156,9 +159,10 @@ export function nextCursorFrom(
     | undefined,
   sort: ResolvedSort,
   hasMore: boolean,
+  page: { fingerprint: string; nextOffset: number },
 ): string | null {
   if (!hasMore || !lastRow) return null
-  return encodeCursor({ s: sortValueOf(lastRow, sort), id: lastRow.id })
+  return encodeCursor({ s: sortValueOf(lastRow, sort), id: lastRow.id, f: page.fingerprint, o: page.nextOffset })
 }
 
 // ── 조립 ─────────────────────────────────────────────────────────────────
@@ -170,20 +174,9 @@ export interface CollectionLike {
   schema_version: number
 }
 
-/**
- * `GET /api/v1/{slug}` 와 MCP `list_items` 의 공통 본문.
- * 쿼리는 parseCollectionQuery 가 이미 스키마로 검증한 것이어야 한다.
- */
-export async function buildCollectionResponse(
-  db: Db,
-  collection: CollectionLike,
-  query: CollectionQuery,
-): Promise<CollectionResponse> {
-  const now = new Date()
-  const fields = collection.schema_json
-
-  // 1. 소스는 아이템과 무관하게 항상 전부 읽는다. sources 블록이 조건부가 되면 안 된다
-  const sourceRows = await db
+/** 컬렉션의 소스 상태 행 — 응답의 sources 블록과 `?source=` 해석, 뷰 진단이 같이 쓴다 */
+export async function loadSourceStates(db: Db, collectionId: string): Promise<SourceStateLike[]> {
+  return db
     .select({
       id: sources.id,
       host: sources.host,
@@ -191,7 +184,25 @@ export async function buildCollectionResponse(
       last_ok_at: sources.last_ok_at,
     })
     .from(sources)
-    .where(eq(sources.collection_id, collection.id))
+    .where(eq(sources.collection_id, collectionId))
+}
+
+/**
+ * 표·REST·MCP 의 공통 본문 (A22·A46).
+ * 쿼리는 resolveCollectionRequest(또는 parseCollectionQuery) 가 이미 검증한 것이어야 한다.
+ * `sourceRows` 를 주면 다시 읽지 않는다 (해석 단계에서 이미 읽은 경우).
+ */
+export async function buildCollectionResponse(
+  db: Db,
+  collection: CollectionLike,
+  query: CollectionQuery,
+  opts: { sourceRows?: readonly SourceStateLike[]; now?: Date } = {},
+): Promise<CollectionResponse> {
+  const now = opts.now ?? new Date()
+  const fields = collection.schema_json
+
+  // 1. 소스는 아이템과 무관하게 항상 전부 읽는다. sources 블록이 조건부가 되면 안 된다
+  const sourceRows = opts.sourceRows ?? (await loadSourceStates(db, collection.id))
 
   // 2. `?source=` 를 실제 소스 id 로 푼다. 못 찾으면 빈 배열 → 아이템 0건, 상태는 그대로 노출
   const sourceIds = query.source
@@ -228,6 +239,9 @@ export async function buildCollectionResponse(
 
   const countsBySourceId = new Map<string, number>(counts.map((c) => [c.source_id, Number(c.n)]))
   const hostBySourceId = new Map<string, string>(sourceRows.map((s) => [s.id, s.host]))
+  // 조건에 맞는 전체 개수 — 출처별 개수의 합이 곧 전체다 (같은 where 로 셌다)
+  let total = 0
+  for (const n of countsBySourceId.values()) total += n
 
   const includeProvenance = query.include.includes('provenance')
 
@@ -243,7 +257,12 @@ export async function buildCollectionResponse(
     schema_version: collection.schema_version,
     page: {
       limit: plan.limit,
-      next_cursor: nextCursorFrom(pageRows[pageRows.length - 1], plan.sort, hasMore),
+      next_cursor: nextCursorFrom(pageRows[pageRows.length - 1], plan.sort, hasMore, {
+        fingerprint: plan.fingerprint,
+        nextOffset: plan.offset + pageRows.length,
+      }),
+      total,
+      offset: plan.offset,
     },
   }
 }

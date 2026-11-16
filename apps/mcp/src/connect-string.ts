@@ -22,8 +22,9 @@
 //   3. 헤더를 지원하는 커넥터를 위해 `authorizationHeader` 를 같이 돌려준다.
 //      화면에서는 접어 두고, 펼치면 보인다 (보장선 B5).
 //
-// TODO(G4): 커넥터의 OAuth 흐름(MCP Authorization spec)을 붙이면 `?key=` 는 없앨 수 있다.
-//   5일 범위 밖이라 지금은 위 완충으로 간다.
+// ※ ADR A48 (2026-11): 위 2번(`?key=`)은 폐기 예정이다. 이 함수는 더 이상 키를 주소에 싣지 않고,
+//   비공개 컬렉션은 Authorization 헤더로 연결한다. 한 줄 경로는 unlisted 다.
+//   커넥터 OAuth 를 붙이면 서버의 `?key=` 수신도 제거한다 (새 ADR).
 
 import type { Visibility } from '@endpointer/core'
 
@@ -77,7 +78,10 @@ export function buildConnectString(input: ConnectStringInput): ConnectString {
   const key = input.apiKey?.trim() ?? ''
   const keyMissing = requiresKey && key === ''
 
-  const url = requiresKey && key !== '' ? `${bareUrl}?${KEY_QUERY_PARAM}=${encodeURIComponent(key)}` : bareUrl
+  // A48 — 키를 주소에 싣지 않는다 (프록시·접근 로그·브라우저 기록에 남는다). 비공개는 헤더로 보낸다.
+  // 서버는 예전에 만들어진 `?key=` 주소를 아직 받지만(폐기 예정), 새로 만들지는 않는다.
+  const url = bareUrl
+  void KEY_QUERY_PARAM
 
   return {
     url,
@@ -103,8 +107,7 @@ function buildGuide(o: { requiresKey: boolean; keyMissing: boolean; visibility: 
   ]
 
   if (o.requiresKey) {
-    // 비밀이 한 줄 안에 들어 있다는 사실을 숨기지 않는다. 숨기면 사용자가 아무 데나 붙여넣는다.
-    lines.push('이 주소에는 나만 쓸 수 있는 열쇠가 들어 있습니다. 다른 사람에게 보내지 마세요.')
+    lines.push('비공개 컬렉션이라 커넥터의 헤더 칸에 Authorization: Bearer <API 키> 를 넣어야 합니다. 키는 다른 사람에게 보내지 마세요.')
   } else if (o.visibility === 'unlisted') {
     lines.push('이 주소를 아는 사람은 누구나 볼 수 있습니다. 공개해도 괜찮은 내용인지 한 번만 확인해 주세요.')
   }
