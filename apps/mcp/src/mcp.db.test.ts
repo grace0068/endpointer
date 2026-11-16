@@ -135,6 +135,8 @@ describe.skipIf(!status.ok)('MCP — 기준 데이터에서 웹 표·REST 와 �
       const out = await call(client, 'list_items', args)
       expect(out.isError).toBe(true)
       expect(out.structuredContent?.error.code).toBe(code)
+      // 글에도 같은 코드 — 오류 결과의 structuredContent 를 모델에게 안 보여주는 클라이언트가 있다
+      expect(out.content[0]?.text).toContain(`(오류 코드: ${code})`)
       const restSide = await runCollectionRequest(db, ref.collection, { params: qs, now: REFERENCE_NOW })
       expect(restSide.ok).toBe(false)
       if (!restSide.ok) {

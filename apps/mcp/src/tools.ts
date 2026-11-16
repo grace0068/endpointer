@@ -299,6 +299,9 @@ export function errorResult(code: string, message: string, problems: readonly un
       if (typeof m === 'string') lines.push(`- ${m}`)
     }
   }
+  // 코드는 글에도 싣는다 — 클라이언트에 따라 오류 결과의 structuredContent 를 모델에게 안 보여준다
+  // (Claude Code 로 실제 연결해 확인: 모델이 "오류 코드가 없다" 고 보고했다). REST 의 error.code 와 같은 값이다
+  lines.push(`(오류 코드: ${code})`)
   return {
     content: [{ type: 'text', text: lines.join('\n') }],
     structuredContent: { error: { code, message, ...(problems.length > 0 ? { problems } : {}) } },
@@ -339,7 +342,7 @@ export function registerCollectionTools(server: McpServer, ctx: ToolContext): vo
         `항목 구성: ${collectionOverview(collection)}`,
         '조건은 전부 선택이고, 아무것도 안 주면 최근에 올라온 순서로 보여준다.',
         '이해하지 못한 조건이 있으면 결과를 내지 않고 무엇이 틀렸는지 알려준다 — 그 조건을 고쳐 다시 부른다.',
-        '응답에는 항목과 함께 사이트별 상태가 언제나 들어 있다 — 일부 사이트가 잠시 막혀 있어도 나머지는 그대로 나온다.',
+        '결과를 내면 항목과 함께 사이트별 상태가 언제나 들어 있다 — 일부 사이트가 잠시 막혀 있어도 나머지는 그대로 나온다. 조건이 틀려 거절될 때는 결과 대신 오류 문장과 오류 코드만 온다.',
       ].join('\n'),
       inputSchema: toolInput(buildListItemsShape(fields)),
       annotations: { readOnlyHint: true, openWorldHint: true },
@@ -464,6 +467,6 @@ export function instructionsFor(collection: AccessibleCollection, viewNames: rea
       : []),
     '조건이 붙는 질문이면 list_items, 찾는 말이 있으면 search_items 를 쓴다.',
     '어떤 조건을 걸 수 있는지 모르겠으면 get_schema 를 먼저 부른다.',
-    '응답에 사이트별 상태가 늘 함께 온다. 어떤 사이트가 "다시 맞추는 중" 이면 그 사이트 몫은 마지막으로 받아온 내용이라는 뜻이니, 사용자에게 그 사실을 같이 알려 준다.',
+    '결과에는 사이트별 상태가 늘 함께 온다. 어떤 사이트가 "다시 맞추는 중" 이면 그 사이트 몫은 마지막으로 받아온 내용이라는 뜻이니, 사용자에게 그 사실을 같이 알려 준다. 조건이 틀리면 결과 없이 오류 문장과 오류 코드가 온다 — 조건을 고쳐 다시 부른다.',
   ].join('\n')
 }
