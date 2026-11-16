@@ -23,7 +23,14 @@ import {
   type FieldDef,
   type ViewHealth,
 } from '@endpointer/core'
-import { loadSourceStates, loadStoredView, loadStoredViews, type StoredView } from '@endpointer/core/query'
+import {
+  baselineViewMatches,
+  baselineViewMatchesBySlug,
+  loadSourceStates,
+  loadStoredView,
+  loadStoredViews,
+  type StoredView,
+} from '@endpointer/core/query'
 
 import type { CollectionRecord } from './collections'
 import { safeQuery, type Loaded } from './db'
@@ -89,6 +96,19 @@ function nameProblem(name: string): string | null {
 }
 
 /**
+ * 기준선 (ADR A52) — 저장·덮어쓰기·알림 켬 순간 지금 맞는 항목을 "이미 본 것" 으로 적는다.
+ * 그래야 알림이 **그 뒤에 들어온 것만** 나간다. 이게 없으면 알림을 켠 첫 수집이 이미 맞던 것 전부를 보낸다.
+ * 뷰는 이미 저장됐으므로 기준선이 실패해도 저장을 실패로 되돌리지 않는다 — 다음 저장·켬이 다시 잡는다.
+ */
+async function baseline(run: () => Promise<unknown>): Promise<void> {
+  try {
+    await run()
+  } catch (cause) {
+    console.warn('[endpointer/web] 조건의 기준선을 잡지 못했습니다', cause)
+  }
+}
+
+/**
  * 지금 보는 상태를 새 뷰로 저장한다. 상한은 서버가 거부한다 (계약 §5 — 화면 안내만으론 우회된다).
  */
 export async function createView(
@@ -134,6 +154,7 @@ export async function createView(
               ${def.def.columns === null ? null : JSON.stringify(def.def.columns)}::jsonb,
               ${ownerId}, ${def.def.pinned})
     `
+    await baseline(() => baselineViewMatchesBySlug(core.db, collection.id, slug))
     return { ok: true, slug }
   })
   return result.ok ? result.data : { ok: false, message: result.message }
@@ -178,6 +199,8 @@ export async function updateView(
                        updated_at = now()
       where id = ${row.id} and collection_id = ${collection.id}
     `
+    // 조건이 바뀌면 새 조건에 원래 맞던 것은 "들어온 것" 이 아니다 (A52)
+    await baseline(() => baselineViewMatches(core.db, collection.id, row.id))
     return { ok: true, slug }
   })
   return result.ok ? result.data : { ok: false, message: result.message }
@@ -231,15 +254,18 @@ export function renameView(collection: ViewCollection, actor: Actor, viewId: str
 }
 
 /** 알림 켬/끔. 어디로 갈지는 뷰가 아니라 컬렉션의 체크된 주소가 정한다 (07-30 개편) */
-export function setViewNotify(collection: ViewCollection, actor: Actor, viewId: string, on: boolean) {
+export async function setViewNotify(collection: ViewCollection, actor: Actor, viewId: string, on: boolean) {
   const notify = on ? JSON.stringify({ on: 'enter' }) : null
-  return guardedViewUpdate(collection, actor, async (sql) => {
+  const result = await guardedViewUpdate(collection, actor, async (sql) => {
     const r = await sql`
       update views set notify_json = ${notify}::jsonb, updated_at = now()
       where id = ${viewId}::uuid and collection_id = ${collection.id}
     `
     return r.count
   }, viewId)
+  // 켜는 순간이 기준선이다 — 켜기 전부터 맞던 것은 알리지 않는다 (A52)
+  if (result.ok && on) await safeQuery((core) => baseline(() => baselineViewMatches(core.db, collection.id, viewId)))
+  return result
 }
 
 // ── 사람 문장 — core 것을 그대로 쓴다 (MCP 도구 설명과 갈라지지 않게) ──────

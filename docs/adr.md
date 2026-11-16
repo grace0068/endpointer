@@ -144,6 +144,13 @@
 |---|---|---|---|---|---|
 | **A51** | **web 의 lint 와 브라우저 시험을 실제로 돌게 한다.** ① lint: `apps/web/eslint.config.mjs`(flat config — Next 공식 `core-web-vitals` + `typescript` 규칙)를 두고, **web 의 `eslint` 를 10 → 9 로 내린다.** ② 브라우저 시험: web 의 개발 의존성에 `playwright` 를 **워커와 같은 버전**으로 넣어 이미 설치된 Chromium 을 같이 쓴다. 별도 러너(`@playwright/test`)는 들이지 않고 기존 vitest 가 라이브러리를 부른다. 시험은 `*.e2e.ts` 로 두어 `pnpm test` 에 섞이지 않게 하고 `pnpm --filter @endpointer/web test:e2e` 로 돈다 — 빌드한 앱을 **테스트 DB** 에 붙여 띄우고 실제 브라우저로 누른다. DB·브라우저가 없으면 건너뜀으로 표시한다(A50) | `accepted` (2026-11-16) | ① 설정 파일이 없어 ESLint 9+ 는 실행조차 안 됐다. 파일을 두자 이번엔 크래시했다 — `eslint-config-next` 가 묶어 오는 `eslint-plugin-react@7.37.5` 는 `eslint ^9.7` 까지만 지원하고 ESLint 10 에서 사라진 `context.getFilename()` 을 부른다. 호환층(`@eslint/compat`)을 새로 들이는 것보다 지원 범위 안으로 내리는 쪽이 의존이 적다. ② 열 끌기·열 고르기·저장 폼은 서버 함수 테스트로는 안 잡히는 클라이언트 동작이다(`router.replace`·드래그 이벤트). 워커가 이미 Playwright 와 Chromium 을 들고 있어 새로 내려받을 것이 없다 | ① `eslint-plugin-react` 가 ESLint 10 을 지원하면(또는 `eslint-config-next` 가 그 판을 묶으면) → 10 으로 되돌린다. ② 브라우저 시험이 늘어 vitest 로 다루기 버거워지면(병렬·재시도·추적) → `@playwright/test` 를 새 ADR 로 | `apps/web/package.json`(eslint ^9 · playwright · `test:e2e`), `apps/web/eslint.config.mjs`(신설), `apps/web/vitest.e2e.config.ts`·`e2e/*`(신설), lint 가 짚은 web 소스(`create-flow`·`tour`·`view-rename`·`page`·`hero-band`·`layout` — 고친 뒤 브라우저 시험으로 같은 동작 확인) |
 
+
+## A52~ — 전체 실행 검증에서 생긴 결정 (2026-11-17)
+
+| # | 결정 | 상태 | 근거 | 이걸 다시 보게 만드는 조건 | 영향받는 곳 |
+|---|---|---|---|---|---|
+| **A52** | **뷰의 매칭 기준선은 정의가 정해지는 순간 잡는다 — 알림은 그 뒤에 들어온 것만이다.** 뷰를 **만들 때 · 조회 상태를 덮어쓸 때 · 알림을 켤 때** `view_matches` 를 그 시각의 매칭 집합으로 맞춘다(기준선). 기준선은 사건이 아니다 — `notification_log` 에 남기지 않고 발송하지 않는다. 그 뒤의 평가(수집 직후 · KST 자정)는 지금처럼 차집합으로 enter 를 잡는다. 매칭 집합을 만드는 코드는 하나다 — core 의 `currentViewMatchIds`(`parseStoredView` → `viewToQuery` → `buildItemsWhere`)를 워커 평가와 기준선이 같이 부른다. 깨진 뷰(A47)는 기준선도 잡지 않는다(평가도 건너뛰므로) | `accepted` (2026-11-17) | 전체 실행 검증(큐 포함, `apps/worker/scripts/full-run-check.ts`)에서 "청년" 뷰를 저장하고 알림을 켠 뒤 새 항목 1건이 들어오자 웹훅이 **4건**(이미 맞던 3건 + 새 1건)을 실었다. 뷰는 매칭 기록이 빈 채로 태어나 첫 평가가 이미 맞던 것 전부를 "새로 들어옴" 으로 셌다. 실제 컬렉션이면 알림을 켠 첫 수집에 수십 건이 한꺼번에 나간다. 조건을 고쳐 덮어써도 같다 — 새 조건에 원래 맞던 항목이 "들어온 것" 이 된다. 델타 2-5 의 enter 는 **전이**이지 "지금 맞는 것" 이 아니다 | 사용자가 "지금 맞는 것도 한 번 받아보기" 를 원하면 → 기준선을 바꾸지 말고 별도의 명시적 동작("지금 목록 보내기")으로 연다. 알림 켬 = 앞으로의 전이라는 뜻은 그대로 둔다 | `packages/core/src/query/matches.ts`(신설), `apps/worker/src/jobs/evaluate-views.ts`(같은 함수로 매칭 집합), `apps/web/lib/views.ts`(`createView`·`updateView`·`setViewNotify`), `docs/api.md` §4 |
+
 ---
 
 ## 열린 결정 (기획서 16장) — 정해지면 여기로 승격

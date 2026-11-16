@@ -178,4 +178,36 @@ describe.skipIf(!status.ok)('뷰 — 지금 보는 상태를 그대로 저장하
     expect(fixed.ok).toBe(true)
     expect((await rest(ref.collection.slug, 'view=needs-fix')).status).toBe(200)
   })
+
+  it('저장·덮어쓰기·알림 켬 순간 지금 맞는 항목이 기준선이 된다 — 그 뒤에 들어온 것만 알린다 (A52)', async () => {
+    const core = await loadCore()
+    const sql = core!.queryClient
+    const matched = async (slug: string) =>
+      (await sql<{ n: number }[]>`
+        select count(*)::int n from view_matches m join views v on v.id = m.view_id
+        where v.collection_id = ${ref.collection.id} and v.slug = ${slug}`)[0]?.n
+    const state: TableState = { where: [], q: '청년', source: null, sort: [], columns: null }
+
+    const saved = await createView(ref.collection, ownerActor, { name: 'Baseline', state })
+    expect(saved.ok).toBe(true)
+    const total = (await rest(ref.collection.slug, 'view=baseline&limit=1')).body.page.total
+    expect(total).toBeGreaterThan(0)
+    expect(await matched('baseline')).toBe(total) // 저장 순간 이미 맞는 것 = 기준선
+
+    // 기록을 비워 두고 알림을 켜면 — 켜는 순간 다시 잡는다
+    const view = (await sql<{ id: string }[]>`select id from views where collection_id = ${ref.collection.id} and slug = 'baseline'`)[0]!
+    await sql`delete from view_matches where view_id = ${view.id}`
+    expect((await setViewNotify(ref.collection, ownerActor, view.id, true)).ok).toBe(true)
+    expect(await matched('baseline')).toBe(total)
+
+    // 조건을 바꿔 덮어쓰면 새 조건의 집합이 기준선이다 (검색어를 빼면 전체)
+    await updateView(ref.collection, ownerActor, 'baseline', { state: { ...state, q: null } })
+    const all = (await rest(ref.collection.slug, 'view=baseline&limit=1')).body.page.total
+    expect(all).toBeGreaterThan(total)
+    expect(await matched('baseline')).toBe(all)
+    // 기준선은 사건이 아니다 — 발송 기록이 생기지 않는다
+    const sent = await sql<{ n: number }[]>`
+      select count(*)::int n from notification_log l join items i on i.id = l.item_id where i.collection_id = ${ref.collection.id}`
+    expect(sent[0]?.n).toBe(0)
+  })
 })

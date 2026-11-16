@@ -22,18 +22,14 @@
 // 들락거리는 항목의 스팸 안전판). 재진입 자체는 새 사건이다.
 
 import {
-  buildItemsWhere,
-  hostMatches,
+  currentViewMatchIds,
   loadSourceStates,
-  parseStoredView,
-  viewToQuery,
   type SourceStateLike,
   type StoredViewRow,
 } from '@endpointer/core/query'
 
 import {
   db,
-  items,
   listSubscriptions,
   listViews,
   loadCollection,
@@ -118,23 +114,13 @@ async function evaluateOne(
   sourceRows: readonly SourceStateLike[],
   now: Date,
 ): Promise<ViewEvaluation> {
-  // 표·REST·MCP 와 **같은 판정**으로 읽는다 (A47) — 검색어·출처까지 포함한 조회 상태
-  const hosts = [...new Set(sourceRows.map((s) => s.host))]
-  const stored = parseStoredView(view as StoredViewRow, fields, hosts)
-  if (stored.health === 'broken') {
-    log.warn({ view: view.slug, problems: stored.problems }, '표 구성과 안 맞는 뷰 — 평가하지 않는다')
+  // 표·REST·MCP 와 **같은 판정**으로 읽는다 (A47) — 검색어·출처까지 포함한 조회 상태.
+  // 기준선(A52)도 같은 함수를 부른다 — 저장 순간의 집합과 평가의 집합이 같은 코드에서 나온다
+  const current = await currentViewMatchIds(db, collectionId, view as StoredViewRow, fields, sourceRows, now)
+  if (current === null) {
+    log.warn({ view: view.slug }, '표 구성과 안 맞는 뷰 — 평가하지 않는다')
     return { view_id: view.id, slug: view.slug, name: view.name, matched: 0, entered: [], exited: [], notified: false, skipped: true }
   }
-
-  // 네 출구가 타는 그 코드로 매칭 집합을 만든다 (머리말)
-  const query = viewToQuery(stored.state, now)
-  const sourceIds =
-    query.source === undefined
-      ? null
-      : sourceRows.filter((s) => hostMatches(s.host, query.source as string)).map((s) => s.id)
-  const where = buildItemsWhere(query, { collectionId, fields, sourceIds })
-  const rows = await db.select({ id: items.id }).from(items).where(where)
-  const current = new Set(rows.map((r) => r.id))
 
   const previous = await viewMatchedItemIds(view.id)
   const entered = [...current].filter((id) => !previous.has(id))
