@@ -71,7 +71,19 @@ export async function attachPreviewViaWorker(input: {
     pasted: input.pasted,
   })
   if (body === null) return { ok: false, message: WORKER_UNAVAILABLE }
-  if (!body.ok) return { ok: false, message: body.message }
+  if (!body.ok) {
+    // 칸을 하나도 자동으로 못 맞췄어도 **물어볼 칸 목록이 있으면 붙여넣기 화면으로 간다.**
+    // 오류 한 줄로 끝내면 "값을 알려주시면 붙일 수 있어요" 라고 말하고 넣을 자리를 안 주는 꼴이다
+    // (기능 ② · 보장선 B1 — 링커리어 실측: 표본 키가 url·name 뿐이라 자동 매핑이 전부 빗나갔다).
+    const missing = body.missing ?? []
+    if (body.stage === 'match' && missing.length > 0) {
+      return {
+        ok: true,
+        data: { host: '', entryUrl: input.url, attached: [], missing, pasted: [], rows: [], warnings: [body.message] },
+      }
+    }
+    return { ok: false, message: body.message }
+  }
   return {
     ok: true,
     data: {

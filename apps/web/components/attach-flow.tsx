@@ -309,7 +309,8 @@ export function AttachFlow({
             </div>
           )}
 
-          {/* 3. 합류 — 주소와 붙여넣은 값만 다시 보낸다 */}
+          {/* 3. 합류 — 주소와 붙여넣은 값만 다시 보낸다. 붙은 칸이 하나도 없으면 합류할 것이 없다 */}
+          {preview.attached.length > 0 && (
           <form action={saveFormAction} className="flex flex-col gap-2.5">
             <input type="hidden" name="entry_url" value={previewState.url} />
             {Object.entries(previewState.pasted).map(([key, value]) => (
@@ -326,6 +327,7 @@ export function AttachFlow({
               )}
             </div>
           </form>
+          )}
         </section>
       )}
     </div>
