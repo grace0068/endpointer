@@ -23,9 +23,10 @@
 
 import type { CollectionSchemaJson } from '@endpointer/core'
 import type { AdapterSpec, InterpretedItem, PathSyntax } from '@endpointer/core/spec'
-import { pathSyntaxFor, validateSpec } from '@endpointer/core/spec'
+import { checkPathSyntax, pathSyntaxFor, validateSpec } from '@endpointer/core/spec'
 
 import { matchFields, traceValue, type FieldMatch, type TraceHit } from '../compile'
+import { deadPathsInSample } from '../compile/sample-check'
 import { getConfig } from '../config'
 import { runAdapter } from '../fetchers'
 import { childLogger } from '../logger'
@@ -106,7 +107,7 @@ const MESSAGES = {
     '이 페이지에서 목록을 찾지 못했어요. 여러 항목이 줄지어 나오는 페이지의 주소를 붙여넣어 주세요.',
   no_match: '이 사이트의 값을 표의 칸에 맞추지 못했어요. 값을 직접 알려주시면 붙일 수 있어요.',
   empty: '목록을 찾았는데 항목을 하나도 읽어내지 못했어요. 다른 페이지 주소로 다시 시도해 주세요.',
-  no_field: '표의 칸 중 하나도 이 사이트에서 찾지 못했어요. 다른 페이지 주소로 다시 시도해 주세요.',
+  no_field: '표의 칸을 이 사이트에서 자동으로 찾지 못했어요. 칸마다 이 사이트의 값을 하나씩 붙여넣어 주시면 위치를 찾아볼게요.',
 } as const
 
 export async function attachSourceToCollection(input: AttachSourceInput): Promise<AttachSourceOutcome> {
@@ -155,8 +156,18 @@ export async function attachSourceToCollection(input: AttachSourceInput): Promis
     confidence: number
     why: string | null
   }
+  // 자동 매핑 경로를 표본에 대 본다 — 표본 어디에서도 값을 못 내는 칸은 "찾음" 이 아니라
+  // "못 찾음" 이다. 그 칸은 아래 stillMissing 으로 가 사용자에게 값을 물어본다 (B1).
+  const dead = deadPathsInSample(
+    candidate.fetch_mode,
+    new Map(Object.entries(matched.result.matched).map(([k, m]) => [k, m.path])),
+    candidate.rows,
+  )
+  if (dead.size > 0) log.info({ url: input.url, dead: [...dead] }, '표본에서 값을 못 내는 매핑 — 물어볼 칸으로 돌린다')
+
   const paths = new Map<string, Placed>()
   for (const [key, m] of Object.entries(matched.result.matched)) {
+    if (dead.has(key)) continue
     paths.set(key, {
       path: m.path,
       ...(m.transform !== undefined ? { transform: m.transform } : {}),
@@ -189,7 +200,7 @@ export async function attachSourceToCollection(input: AttachSourceInput): Promis
         : {}),
     },
     list: matched.result.list,
-    ...(matched.result.dedupe_key !== null ? { dedupe_key: matched.result.dedupe_key } : {}),
+    ...dedupeKeyFor(matched.result.dedupe_key, candidate.fetch_mode, candidate.rows),
     fields: Object.fromEntries(
       [...paths].map(([key, p]) => [
         key,
@@ -431,3 +442,25 @@ function sampleValues(items: readonly InterpretedItem[], key: string): string[] 
 }
 
 export type { FieldMatch }
+
+/**
+ * 항목 식별 경로(dedupe_key)를 스펙에 넣을 모양으로 고른다.
+ *
+ * 매칭 모델은 칸 경로는 `$.title` 처럼 주면서 식별자만 `id` 처럼 맨 키로 주는 일이 있다
+ * (링커리어 실측 — 그 하나 때문에 칸 5개를 다 맞추고도 스펙 전체가 거절됐다).
+ * 맨 키는 JSONPath 로 고쳐 쓰고, 그래도 문법이 안 맞거나 표본에서 값을 못 내면 **뺀다** — 식별자는 선택 항목이라
+ * 없으면 해석기가 정규화한 제목의 해시로 항목을 가른다(interpret.ts). 선택 항목 하나가 사이트 붙이기를 통째로 막지 않게 한다.
+ */
+export function dedupeKeyFor(
+  raw: string | null,
+  mode: AdapterSpec['fetch']['mode'],
+  sampleRows: readonly unknown[] = [],
+): { dedupe_key?: string } {
+  if (raw === null) return {}
+  let path = raw.trim()
+  if (pathSyntaxFor(mode) === 'jsonpath' && /^[A-Za-z_][\w]*(\.[A-Za-z_][\w]*)*$/.test(path)) path = `$.${path}`
+  if (checkPathSyntax(path, mode, 'dedupe_key') !== null) return {}
+  // 표본에서 값을 못 내는 식별자는 모든 행을 같은 키로 묶는다 — 넣지 않는 편이 낫다
+  if (deadPathsInSample(mode, new Map([['dedupe_key', path]]), sampleRows).size > 0) return {}
+  return { dedupe_key: path }
+}

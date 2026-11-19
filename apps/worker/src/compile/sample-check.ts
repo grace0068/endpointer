@@ -91,3 +91,26 @@ export function checkPathsAgainstSample(
   )
   return errors
 }
+
+/**
+ * 경로마다 표본에서 값을 내는지 — 하나도 못 내는 경로의 키를 돌려준다 (사이트 붙이기용).
+ *
+ * 컬렉션 만들기(위 함수)는 죽은 경로를 **재생성**으로 고치지만, 붙이기는 다르다 —
+ * 칸 하나하나가 독립이고 못 찾은 칸은 사용자에게 **물어본다**(보장선 B1). 그래서 죽은 칸은
+ * 거절 사유가 아니라 "못 찾음" 으로 돌린다. 링커리어 실측: 표본 키는 `url`·`name` 인데
+ * 매칭이 `$.title`·`$.organizationName` 을 지어내 5칸을 다 "찾았다" 고 하고는 20행이 전부 비었다.
+ *
+ * JSONPath 모드만 본다(CSS 표본은 행 글자라 대 볼 수 없다). 대 볼 표본이 없으면 아무것도 죽이지 않는다.
+ */
+export function deadPathsInSample(
+  mode: AdapterSpec['fetch']['mode'],
+  paths: ReadonlyMap<string, string>,
+  rows: readonly unknown[],
+): Set<string> {
+  const dead = new Set<string>()
+  if (pathSyntaxFor(mode) !== 'jsonpath') return dead
+  const sample = rows.filter(isRecordRow).slice(0, MAX_SAMPLE_ROWS)
+  if (sample.length === 0) return dead
+  for (const [key, path] of paths) if (hitCount(sample, path) === 0) dead.add(key)
+  return dead
+}

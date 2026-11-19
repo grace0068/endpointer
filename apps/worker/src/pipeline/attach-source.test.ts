@@ -83,7 +83,7 @@ vi.mock('./verify-link', () => ({
   verifyLinkField: async () => (STATE.linkOk ? { ok: true, reason: '항목 상세로 보입니다' } : { ok: false, reason: '열어 보니 목록이었습니다' }),
 }))
 
-const { attachSourceToCollection } = await import('./attach-source')
+const { attachSourceToCollection, dedupeKeyFor } = await import('./attach-source')
 
 const SCHEMA: CollectionSchemaJson = [
   { key: 'title', label: '공고명', type: 'text', required: true, mapping: null, value_labels: null },
@@ -215,3 +215,18 @@ describe('매핑이 못 찾은 칸은', () => {
     expect(r.missing).toEqual([])
   })
 })
+
+describe('dedupeKeyFor — 식별자 하나가 사이트 붙이기를 통째로 막지 않는다', () => {
+  it('JSONPath 모드의 맨 키는 $. 를 붙여 쓴다 (링커리어 실측: "id")', () => {
+    expect(dedupeKeyFor('id', 'inline_json')).toEqual({ dedupe_key: '$.id' })
+    expect(dedupeKeyFor('node.id', 'json')).toEqual({ dedupe_key: '$.node.id' })
+    expect(dedupeKeyFor('$.id', 'inline_json')).toEqual({ dedupe_key: '$.id' })
+  })
+  it('고쳐도 문법이 안 맞으면 뺀다 — 제목 해시로 가른다', () => {
+    expect(dedupeKeyFor('css:.id', 'inline_json')).toEqual({})
+    expect(dedupeKeyFor('id', 'html')).toEqual({})
+    expect(dedupeKeyFor('css:a.link@href', 'html')).toEqual({ dedupe_key: 'css:a.link@href' })
+    expect(dedupeKeyFor(null, 'json')).toEqual({})
+  })
+})
+

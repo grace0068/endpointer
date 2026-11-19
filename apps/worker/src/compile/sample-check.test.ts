@@ -3,7 +3,7 @@ import type { AdapterSpec } from '@endpointer/core/spec'
 import { AdapterSpecSchema } from '@endpointer/core/spec'
 import { describe, expect, it } from 'vitest'
 
-import { checkPathsAgainstSample } from './sample-check'
+import { checkPathsAgainstSample, deadPathsInSample } from './sample-check'
 
 /** 링커리어 activityItems 의 실제 모양 — 키는 셋뿐이다 */
 const ROWS = [
@@ -114,5 +114,25 @@ describe('checkPathsAgainstSample — 판단하지 않는 경우', () => {
       fields: { title: { path: '$.title', type: 'text' } },
     })
     expect(checkPathsAgainstSample(spec, ROWS, KEYS).length).toBeGreaterThan(0)
+  })
+})
+
+describe('deadPathsInSample — 사이트 붙이기: 표본에서 값을 못 내는 매핑은 "못 찾음" 으로 (링커리어 실측)', () => {
+  const rows = [
+    { url: 'https://linkareer.com/activity/1', name: '공모전 1', imageUrl: 'x' },
+    { url: 'https://linkareer.com/activity/2', name: '공모전 2', imageUrl: 'y' },
+  ]
+  const paths = new Map([
+    ['title', '$.title'],
+    ['link', '$.url'],
+    ['organization', '$.organizationName'],
+  ])
+  it('행에 없는 키를 가리키는 칸만 골라낸다', () => {
+    expect([...deadPathsInSample('inline_json', paths, rows)].sort()).toEqual(['organization', 'title'])
+  })
+  it('CSS 모드나 대 볼 표본이 없으면 아무것도 죽이지 않는다', () => {
+    expect(deadPathsInSample('html', paths, rows).size).toBe(0)
+    expect(deadPathsInSample('json', paths, []).size).toBe(0)
+    expect(deadPathsInSample('json', paths, ['행 글자']).size).toBe(0)
   })
 })
