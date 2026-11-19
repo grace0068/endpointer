@@ -1,0 +1,64 @@
+{
+  "taken_at": "2026-11-19T10:31:06.265Z",
+  "collection": {
+    "slug": "127-0-0-1-64678",
+    "name": "전체 실행 검증"
+  },
+  "shots": [
+    {
+      "file": "01-home.png",
+      "title": "첫 화면",
+      "url": "/"
+    },
+    {
+      "file": "03-create-preview.png",
+      "title": "컬렉션 만들기 — 주소 하나로 채워진 표 미리보기",
+      "url": "/collections/new"
+    },
+    {
+      "file": "04-collection.png",
+      "title": "컬렉션 개요",
+      "url": "/collections/127-0-0-1-64678"
+    },
+    {
+      "file": "05-table.png",
+      "title": "표 — 서버 검색·정렬·페이지",
+      "url": "/collections/127-0-0-1-64678/table"
+    },
+    {
+      "file": "06-table-view.png",
+      "title": "저장한 조건(뷰)으로 본 표",
+      "url": "/collections/127-0-0-1-64678/table?view=view-1"
+    },
+    {
+      "file": "07-views.png",
+      "title": "저장한 조건 · 알림 켬 · 알림 받을 곳",
+      "url": "/collections/127-0-0-1-64678/views"
+    },
+    {
+      "file": "08-sources.png",
+      "title": "사이트 상태 · 수집 기록 (자동 복구 포함)",
+      "url": "/collections/127-0-0-1-64678/sources"
+    },
+    {
+      "file": "09-workshop.png",
+      "title": "작업실",
+      "url": "/collections/127-0-0-1-64678/workshop"
+    },
+    {
+      "file": "10-feed.png",
+      "title": "피드",
+      "url": "/collections/127-0-0-1-64678/feed"
+    },
+    {
+      "file": "11-connect.png",
+      "title": "API · AI 연결",
+      "url": "/collections/127-0-0-1-64678/connect"
+    },
+    {
+      "file": "12-settings.png",
+      "title": "설정 · 공유 안내",
+      "url": "/collections/127-0-0-1-64678/settings"
+    }
+  ]
+}
