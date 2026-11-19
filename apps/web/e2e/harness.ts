@@ -12,6 +12,9 @@ import { fileURLToPath } from 'node:url'
 
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright'
 
+/** 로그인 미설정(데모 — 모두 주인) 으로 띄우는 환경 값 */
+export const DEMO_AUTH = { AUTH_GOOGLE_ID: '', AUTH_GOOGLE_SECRET: '' } as const
+
 const WEB_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 export interface E2eEnv {
@@ -56,7 +59,9 @@ export async function startApp(extraEnv: Record<string, string> = {}): Promise<R
   const nextBin = createRequire(path.join(WEB_ROOT, 'package.json')).resolve('next/dist/bin/next')
   const child: ChildProcess = spawn(process.execPath, [nextBin, 'start', '-p', String(port), '-H', '127.0.0.1'], {
     cwd: WEB_ROOT,
-    env: { ...process.env, DATABASE_URL: testDatabaseUrl() ?? '', ...extraEnv },
+    // 로그인은 데모 모드로 고정한다 — 루트 .env 에 구글 키가 있어도 시험이 그 상태에 휘둘리지 않게.
+    // dotenv(next.config)는 이미 있는 키를 덮지 않으므로 빈 값을 주면 그대로 "미설정" 이다.
+    env: { ...process.env, DATABASE_URL: testDatabaseUrl() ?? '', ...DEMO_AUTH, ...extraEnv },
     stdio: 'ignore',
   })
   const base = `http://127.0.0.1:${port}`

@@ -221,6 +221,9 @@ async function main(): Promise<void> {
     DATABASE_URL: DB,
     WORKER_INTERNAL_URL: `http://127.0.0.1:${workerHttpPort}`,
     WORKER_INTERNAL_TOKEN: TOKEN,
+    // 로그인은 데모 모드로 고정 — 루트 .env 의 구글 키와 무관하게 (dotenv 는 이미 있는 키를 덮지 않는다)
+    AUTH_GOOGLE_ID: '',
+    AUTH_GOOGLE_SECRET: '',
   })
   const WEB = `http://127.0.0.1:${webPort}`
   await waitFor('웹', async () => (await fetch(WEB)).status < 500, 90_000)
