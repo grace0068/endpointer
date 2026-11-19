@@ -21,6 +21,7 @@ import {
   finishRun,
   insertCandidateAdapter,
   insertSource,
+  markSourceRun,
   promoteAdapter,
   queryClient,
   sources,
@@ -128,6 +129,9 @@ export async function persistNewCollection(input: PersistInput): Promise<Persist
         error_summary: null,
       })
     }
+    // 첫 수집도 수집이다 — 마지막 확인 시각을 남긴다. 빠지면 항목이 다 들어와 있는데
+    // 사이트 상태가 "아직 받아온 적 없어요" 로 보인다 (정기 수집만 남기고 있었다)
+    await markSourceRun(created.source.id, true)
 
     log.info(
       { slug, host: input.host, items: upsert.total, version: adapter.version },
@@ -211,6 +215,7 @@ export async function persistAttachedSource(input: AttachPersistInput): Promise<
         error_summary: null,
       })
     }
+    await markSourceRun(source.id, true) // 첫 수집의 확인 시각 (위 컬렉션 만들기와 같은 이유)
 
     log.info(
       { collection_id: input.collection_id, host: input.host, items: upsert.total, version: adapter.version },
